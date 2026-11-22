@@ -1,0 +1,6 @@
+{
+  "knowledge_bases": [
+    { "path": "D:/kb/my-notes" },
+    { "path": "D:/kb/uart-driver" }
+  ]
+}

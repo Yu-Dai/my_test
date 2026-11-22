@@ -1,0 +1,219 @@
+# LLM Wiki 知識庫系統
+
+以 Karpathy「LLM Wiki」理念為基礎的知識庫：LLM 把原始來源整理成 markdown wiki，AI agent 透過 MCP 檢索。
+不需要 embedding model，檢索靠關鍵字與索引；設計上假設模型能力偏弱。
+
+完整設計見 [LLM Wiki 知識庫系統：實作規格.md](LLM%20Wiki%20知識庫系統：實作規格.md)。
+
+## 目前進度
+
+| 元件 | 狀態 |
+| --- | --- |
+| 核心函式庫與 `kb` CLI（驗證、索引、搜尋） | 可用 |
+| wiki MCP server（唯讀，四個工具，本機路徑掛載） | 可用 |
+| 維護 skill：init、ingest、commit、lint、query test、undo、rebuild | 可用 |
+| 維護 skill：update（依來源 diff 更新） | 尚未實作 |
+| 共享知識庫（bare repo 遠端、本機快取） | 尚未實作 |
+| toMarkdown skill | 尚未實作 |
+
+## 安裝
+
+需要 Node.js 20 以上。
+
+```
+npm install
+npm test
+```
+
+## 設定 wiki MCP
+
+### 1. 建立掛載設定檔
+
+設定檔列出要使用的知識庫資料夾。預設位置是使用者家目錄下的 `.llm-wiki/config.json`
+（Windows 為 `C:\Users\<帳號>\.llm-wiki\config.json`）。內容參考 [config.example.json](config.example.json)：
+
+```json
+{
+  "knowledge_bases": [
+    { "path": "D:/kb/my-notes" },
+    { "path": "D:/kb/uart-driver" }
+  ]
+}
+```
+
+- `path` 是知識庫資料夾（裡面有 `kb.json`）。相對路徑以設定檔所在的資料夾為準。
+- Windows 路徑請用 `/`，或把 `\` 寫成 `\\`。
+- 設定檔位置可用 `--config <路徑>` 或環境變數 `LLM_WIKI_CONFIG` 指定。
+- 也可以不用設定檔，直接用 `--kb <路徑>` 指定知識庫，可重複多次。
+
+想先試用，可以掛載 repo 內附的範例知識庫 `examples/sample-kb`。
+
+### 2. 在 AI agent 註冊 MCP server
+
+server 以本機 stdio 模式執行，不開網路 port。把 `<repo>` 換成這個專案的絕對路徑。
+
+Kilo Code（`.kilocode/mcp.json` 或全域 MCP 設定）：
+
+```json
+{
+  "mcpServers": {
+    "wiki": {
+      "command": "node",
+      "args": ["<repo>/src/mcp/server.js"]
+    }
+  }
+}
+```
+
+直接指定知識庫、不使用設定檔的寫法：
+
+```json
+{
+  "mcpServers": {
+    "wiki": {
+      "command": "node",
+      "args": ["<repo>/src/mcp/server.js", "--kb", "<repo>/examples/sample-kb"]
+    }
+  }
+}
+```
+
+Claude Code：
+
+```
+claude mcp add wiki -- node <repo>/src/mcp/server.js --kb <repo>/examples/sample-kb
+```
+
+### 3. 確認
+
+請 agent 呼叫 `GetWikiInfo`。它應該列出已掛載的知識庫。
+設定有問題時 server 仍會啟動，`GetWikiInfo` 的回傳會說明哪個路徑掛載失敗與原因。
+
+## MCP 工具
+
+MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」（`分類/名稱`），實際路徑由系統解析。
+
+| 工具 | 參數 | 用途 |
+| --- | --- | --- |
+| `GetWikiInfo` | `kb`、`category`、`offset`（皆可省略） | 不帶參數列出所有知識庫；帶 `kb` 列出頁面目錄，頁數多時先回分類大綱 |
+| `SearchWiki` | `terms`、`kb`、`scope`、`limit`、`offset` | 關鍵字搜尋，任一命中即算。`scope` 為 `wiki`（預設）或 `raw` |
+| `ReadWiki` | `kb`、`pages` | 讀取頁面全文，附該頁連到的頁面與來源清單 |
+| `FetchRaw` | `kb`、`path`、`section`、`start_line`、`end_line` | 讀取原始來源檔的指定章節或行數範圍 |
+
+典型流程：`GetWikiInfo` → `SearchWiki` 或從目錄挑頁 → `ReadWiki` → 內容不足時 `FetchRaw`。
+
+- 每個工具都有輸出上限，超過時截斷並說明如何取得後續。
+- 查無結果或參數錯誤時，回傳會給下一步建議。
+- 知識庫內容變動（`kb rebuild` 之後）會自動重新載入，不需要重啟 server。
+- 頁面中的圖片路徑會轉成 `kb://知識庫代號/assets/檔名`。圖片取用工具尚未實作。
+
+## 建立與維護知識庫
+
+維護者用 AI agent（例如 Kilo Code）加上維護 skill 作業。需要 git，並已設定 `user.name` 與 `user.email`。
+
+### 準備
+
+1. 讓 `kb` 指令可用。在這個專案的資料夾執行一次：
+
+   ```
+   npm link
+   ```
+
+   之後任何位置都能執行 `kb`。不想用 `npm link` 的話，把下文的 `kb` 換成 `node <repo>/src/cli/kb.js`。
+
+2. 把 [skills/wiki-maintain](skills/wiki-maintain) 資料夾複製到 agent 的 skill 目錄。
+
+### 流程
+
+```
+kb init <資料夾> --name <代號> --title "<名稱>" --description "<描述>" --owner <擁有者> --category <分類> --confidentiality <機密等級>
+```
+
+建立資料夾結構、`kb.json`、`SCHEMA.md` 與 git repo。接著把來源文字檔放進 `raw/`，然後：
+
+```
+kb ingest start                列出待處理的來源
+kb ingest start raw/spec.md    開始處理一份來源：輸出步驟、相關頁面、頁面範本、來源內容
+kb ingest part 2               來源較長時讀取下一段
+（AI 直接在 wiki/ 新增或修改頁面）
+kb ingest commit               檢查全部頁面；通過才更新索引、對應表、log，並做成一筆 commit
+kb ingest status               顯示目前處理到哪裡
+kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 commit
+```
+
+- 一次處理一份來源，一份來源一筆 commit。
+- AI 只寫 `wiki/` 的頁面。`index.md`、`log.md`、`.kb/` 只由 `kb` 寫入，被手動改過時 `kb ingest commit` 會擋下。
+- 驗證沒過就不會 commit。錯誤訊息固定包含：哪裡不合格、正確寫法、下一步。
+- `raw/` 只收文字檔。PDF、Office 檔要先轉成 markdown（toMarkdown skill 尚未實作）。
+- 已處理過的來源不可修改。來源有新版時覆蓋原檔，`kb ingest start` 會把它列為「內容有更新」。
+- 單張圖片上限 1 MB，超過會擋下。
+
+### 修改、檢查、撤銷
+
+```
+kb commit "<說明>"     commit 與來源無關的頁面修改（修錯字、補關鍵字、修 lint 問題）
+kb lint                完整檢查
+kb test                執行檢索測試
+kb test add --terms "<關鍵字,關鍵字>" --expect <頁面代號> [--rank <名次>]
+kb test remove <題號>
+kb undo                撤銷最近一次 ingest 或 commit
+kb rebuild             重新產生 index.md 與搜尋索引
+```
+
+- `kb lint` 檢查：格式錯誤、斷連結、來源引用失效、孤立頁面、標題重複、尚未處理或處理後有更新的來源、
+  沒被引用的來源、沒用到的圖片、檢索測試。內容是否矛盾或過時需要 AI 讀頁面判斷，流程寫在維護 skill 裡。
+- 檢索測試（`.kb/query-tests.json`）每題是「用這些關鍵字搜尋時，這些頁面要排在前 N 名」。
+  不需要 LLM，每次 `kb ingest commit` 與 `kb commit` 前自動執行，沒過就不 commit。
+- `kb undo` 會新增一筆反向的 commit，不改寫歷史，所以已經推到共享資料夾的變更也能撤銷。
+  可以連續執行，一次退一筆。撤銷 ingest 後來源檔仍留在 `raw/`，回到待處理狀態。
+- `log.md` 只增不改：撤銷時原本的紀錄保留，另外附加一筆 undo。
+
+`.kb/provenance.json` 記錄每份來源的 hash、受它影響的頁面、歷次 ingest。每次 ingest 有一個 id，同時寫在 commit 訊息裡，
+用 `git log --grep <id>` 可以找到對應的 commit。
+
+## kb CLI 的查詢與檢查指令
+
+在知識庫資料夾內執行，或加上 `--kb <路徑>`。
+
+```
+node <repo>/src/cli/kb.js check                    檢查整個知識庫
+node <repo>/src/cli/kb.js validate <頁面檔>        檢查單一頁面
+node <repo>/src/cli/kb.js rebuild                  重新產生 index.md 與搜尋索引
+node <repo>/src/cli/kb.js search <關鍵字...>       搜尋頁面
+node <repo>/src/cli/kb.js info                     顯示知識庫名片
+node <repo>/src/cli/kb.js resolve <來源引用>       顯示來源引用所指的內容
+```
+
+## 知識庫格式摘要
+
+```
+<知識庫>/
+  kb.json      說明檔
+  raw/         原始來源（只收文字檔，放入後不修改）
+  wiki/        頁面：wiki/<分類>/<名稱>.md
+  assets/      圖片
+  SCHEMA.md    給維護 AI 的規則（分類方式、領域用語，維護者可調整）
+  index.md     目錄（腳本產生）
+  log.md       操作紀錄（腳本附加）
+  .kb/         搜尋索引、來源與頁面對應表、檢索測試題（腳本產生）
+```
+
+- 頁面代號：`分類/名稱`，都用小寫英數加連字號。中文放在 `title`。
+- 連結：`[[分類/名稱]]`、`[[分類/名稱|顯示文字]]`、`[[知識庫代號:分類/名稱]]`。
+- 路徑一律從知識庫根目錄寫起：`raw/spec.md`、`assets/xxx.png`。
+- 來源引用要寫到位置：`raw/spec.md#3.2`（章節編號或標題）、`raw/drv.c:L120-L180`（行數）。
+- 檔案一律 UTF-8（無 BOM）加 LF 換行。
+
+實際範例見 [examples/sample-kb](examples/sample-kb)。
+
+## 專案結構
+
+```
+src/core/   核心函式庫：解析、驗證、索引、搜尋
+src/cli/    kb CLI
+src/mcp/    wiki MCP server
+src/templates/  頁面範本與 SCHEMA.md 範本
+skills/     給 AI agent 的 skill（SKILL.md）
+examples/   範例知識庫
+test/       單元測試與 MCP 端到端測試
+```

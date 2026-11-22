@@ -1,0 +1,5 @@
+# 專案程式碼一律 LF
+* text=auto eol=lf
+
+# 範例知識庫的內容不可被 git 轉換：行數引用與 hash 依賴原始位元組
+examples/** -text

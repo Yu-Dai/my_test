@@ -1,0 +1,9 @@
+{
+  "name": "sample-uart",
+  "title": "DB1 UART 範例知識庫",
+  "description": "虛構示範板 DB1 的 UART 控制器規格、驅動程式與除錯方法，供測試與示範用",
+  "owner": "llm-wiki",
+  "category": "driver",
+  "schema_version": 1,
+  "confidentiality": "public"
+}

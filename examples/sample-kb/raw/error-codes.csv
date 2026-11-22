@@ -1,0 +1,6 @@
+code,name,meaning,common_cause
+0,UART_OK,成功,
+-1,UART_E_PARAM,參數錯誤,鮑率超出 1200 到 921600 或停止位元不是 1 或 2
+-2,UART_E_TIMEOUT,逾時內沒有收到任何資料,線沒接、對方沒送、腳位多工沒切
+-3,UART_E_OVERRUN,接收溢位,輪詢太慢或中斷被關閉太久
+-4,UART_E_FRAME,訊框錯誤,兩端鮑率不符或 RX 線浮接

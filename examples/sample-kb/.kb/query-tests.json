@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "tests": [
+    {"terms":["波特率"],"expect":["uart/baud-rate"],"max_rank":1},
+    {"terms":["115200","BRR"],"expect":["uart/baud-rate","uart/baud-rate-register"],"max_rank":3},
+    {"terms":["亂碼"],"expect":["guide/debug-no-output"],"max_rank":1},
+    {"terms":["interrupt","輪詢"],"expect":["guide/polling-vs-interrupt","uart/fifo-and-interrupt"],"max_rank":3},
+    {"terms":["PA9"],"expect":["gpio/pin-mux"],"max_rank":1},
+    {"terms":["uart_init"],"expect":["guide/init-uart"],"max_rank":2}
+  ]
+}
