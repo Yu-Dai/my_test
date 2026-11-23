@@ -1,4 +1,4 @@
-import { KB_JSON_FIELDS, SCHEMA_VERSION, SLUG_RE, SUPPORTED_SCHEMA_VERSIONS } from './constants.js';
+import { CONFIDENTIALITY_LEVELS, KB_JSON_FIELDS, SCHEMA_VERSION, SLUG_RE, SUPPORTED_SCHEMA_VERSIONS } from './constants.js';
 
 export const KB_JSON_EXAMPLE = JSON.stringify(
   {
@@ -42,8 +42,11 @@ export function validateKbJson(text) {
   if (typeof meta.name !== 'string' || !SLUG_RE.test(meta.name)) {
     err('kbjson-name', 'name 必須是小寫英數加連字號', '"name": "uart-driver"');
   }
-  for (const key of ['title', 'description', 'owner', 'confidentiality']) {
+  for (const key of ['title', 'description', 'owner']) {
     if (typeof meta[key] !== 'string' || !meta[key].trim()) err(`kbjson-${key}`, `${key} 必填，且必須是文字`, `"${key}": "..."`);
+  }
+  if (!CONFIDENTIALITY_LEVELS.includes(meta.confidentiality)) {
+    err('kbjson-confidentiality', `confidentiality 必須是 ${CONFIDENTIALITY_LEVELS.join('、')} 其中之一（由低到高）`, '"confidentiality": "internal"');
   }
   if (typeof meta.category !== 'string' || !SLUG_RE.test(meta.category)) {
     err('kbjson-category', 'category 必須是小寫英數加連字號', '"category": "driver"');

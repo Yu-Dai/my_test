@@ -40,6 +40,20 @@ function pickKb(mounts, name) {
   return { kb };
 }
 
+function localTime(iso) {
+  if (!iso) return '時間不明';
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 共享知識庫在名片上註明快取日期。 */
+function sharedNote(kb) {
+  if (!kb.shared) return '';
+  const checking = kb.shared.state === 'pending' || kb.shared.state === 'syncing' ? '，正在檢查更新' : '';
+  return `｜共享（本機快取更新於 ${localTime(kb.shared.synced)}${checking}）`;
+}
+
 const pageLine = (p) => `- ${p.id}｜${p.title}｜${p.summary}`;
 
 // ---------------------------------------------------------------- GetWikiInfo
@@ -61,10 +75,11 @@ export function getWikiInfo(mounts, args = {}) {
     }
     const out = [`已掛載 ${kbs.length} 個知識庫${category ? `（分類 ${category}）` : ''}：`, ''];
     for (const k of kbs) {
-      out.push(`- 代號 ${k.name}｜${k.meta.title}｜分類 ${k.meta.category}｜${k.pages.size} 頁`);
+      out.push(`- 代號 ${k.name}｜${k.meta.title}｜分類 ${k.meta.category}｜${k.pages.size} 頁${sharedNote(k)}`);
       out.push(`  ${k.meta.description}`);
+      if (k.shared?.state === 'failed') out.push(`  注意：這次無法從共享資料夾更新（${k.shared.error}），目前使用的是本機快取，內容可能不是最新的。`);
     }
-    if (mounts.problems.length) out.push('', '注意，以下知識庫沒有掛載成功：', ...mounts.problems.map((p) => `- ${p}`));
+    if (mounts.problems.length) out.push('', '注意，以下知識庫沒有掛載成功（請轉告使用者）：', ...mounts.problems.map((p) => `- ${p}`));
     out.push('', `下一步：SearchWiki(terms=["關鍵字"]) 搜尋全部知識庫；或 GetWikiInfo(kb=${q(kbs[0].name)}) 看該庫的頁面目錄。`);
     return out.join('\n');
   }

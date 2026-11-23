@@ -15,6 +15,10 @@ export const FRONTMATTER_FIELDS = ['title', 'type', 'summary', 'keywords', 'alia
 // 定死：kb.json 欄位
 export const KB_JSON_FIELDS = ['name', 'title', 'description', 'owner', 'category', 'schema_version', 'confidentiality'];
 
+// 機密等級，由低到高。掛載時與使用者端設定的 max_confidentiality 比較
+export const CONFIDENTIALITY_LEVELS = ['public', 'internal', 'confidential'];
+export const DEFAULT_MAX_CONFIDENTIALITY = 'internal';
+
 // 內文固定段落（二級標題），順序固定
 export const BODY_SECTIONS = ['內容', '相關頁面', '來源'];
 

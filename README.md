@@ -13,8 +13,8 @@
 | wiki MCP server（唯讀，四個工具，本機路徑掛載） | 可用 |
 | 維護 skill：init、ingest、commit、lint、query test、undo、rebuild | 可用 |
 | 維護 skill：update（依來源 diff 更新） | 尚未實作 |
-| 共享知識庫（bare repo 遠端、本機快取） | 尚未實作 |
-| toMarkdown skill | 尚未實作 |
+| 共享知識庫（bare repo 遠端、本機快取、掛載檢查） | 可用，尚未在網路共享資料夾上實測 |
+| toMarkdown（PDF、Office 轉 markdown） | 不在這個專案內，另案開發 |
 
 ## 安裝
 
@@ -34,14 +34,20 @@ npm test
 
 ```json
 {
+  "max_confidentiality": "internal",
   "knowledge_bases": [
     { "path": "D:/kb/my-notes" },
-    { "path": "D:/kb/uart-driver" }
+    { "remote": "//fileserver/share/kb/uart-driver.git" }
   ]
 }
 ```
 
-- `path` 是知識庫資料夾（裡面有 `kb.json`）。相對路徑以設定檔所在的資料夾為準。
+- `path`：本機的知識庫資料夾（裡面有 `kb.json`），用於個人知識庫。相對路徑以設定檔所在的資料夾為準。
+- `remote`：共享知識庫，也就是共享資料夾上的儲存庫（維護者執行 `kb share` 時會顯示這個路徑）。
+  MCP 會把它複製到本機快取再讀取，不直接讀網路資料夾。
+- `max_confidentiality`：可掛載的最高機密等級，`public`、`internal`、`confidential` 由低到高，省略時為 `internal`。
+  知識庫的 `kb.json` 等級比它高就不會掛載。
+- `cache_dir`：共享知識庫的本機快取位置，省略時為 `~/.llm-wiki/cache`（也可用環境變數 `LLM_WIKI_CACHE`）。
 - Windows 路徑請用 `/`，或把 `\` 寫成 `\\`。
 - 設定檔位置可用 `--config <路徑>` 或環境變數 `LLM_WIKI_CONFIG` 指定。
 - 也可以不用設定檔，直接用 `--kb <路徑>` 指定知識庫，可重複多次。
@@ -105,6 +111,9 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
 - 每個工具都有輸出上限，超過時截斷並說明如何取得後續。
 - 查無結果或參數錯誤時，回傳會給下一步建議。
 - 知識庫內容變動（`kb rebuild` 之後）會自動重新載入，不需要重啟 server。
+- 共享知識庫在 server 啟動時更新快取。更新在背景進行，啟動後馬上可以用既有的快取檢索。
+  更新失敗（例如離線）時沿用快取，`GetWikiInfo` 會註明快取日期與失敗原因。
+- 掛載時檢查：知識庫代號是否重複、`schema_version` 是否支援、機密等級是否允許。沒通過的知識庫不掛載，原因列在 `GetWikiInfo`。
 - 頁面中的圖片路徑會轉成 `kb://知識庫代號/assets/檔名`。圖片取用工具尚未實作。
 
 ## 建立與維護知識庫
@@ -144,7 +153,7 @@ kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 co
 - 一次處理一份來源，一份來源一筆 commit。
 - AI 只寫 `wiki/` 的頁面。`index.md`、`log.md`、`.kb/` 只由 `kb` 寫入，被手動改過時 `kb ingest commit` 會擋下。
 - 驗證沒過就不會 commit。錯誤訊息固定包含：哪裡不合格、正確寫法、下一步。
-- `raw/` 只收文字檔。PDF、Office 檔要先轉成 markdown（toMarkdown skill 尚未實作）。
+- `raw/` 只收文字檔。PDF、Office 檔要先用其他工具轉成 markdown（轉檔工具另案開發，不在這個專案內）。
 - 已處理過的來源不可修改。來源有新版時覆蓋原檔，`kb ingest start` 會把它列為「內容有更新」。
 - 單張圖片上限 1 MB，超過會擋下。
 
@@ -167,6 +176,25 @@ kb rebuild             重新產生 index.md 與搜尋索引
 - `kb undo` 會新增一筆反向的 commit，不改寫歷史，所以已經推到共享資料夾的變更也能撤銷。
   可以連續執行，一次退一筆。撤銷 ingest 後來源檔仍留在 `raw/`，回到待處理狀態。
 - `log.md` 只增不改：撤銷時原本的紀錄保留，另外附加一筆 undo。
+
+### 共享知識庫
+
+沒有 git server 也能共享：在共享資料夾上放一個純儲存用的 git 儲存庫（bare repo），以檔案路徑存取。
+維護者在本機的工作複本作業，完成後推上去；使用者的 MCP 從那裡更新本機快取。
+
+```
+kb share <共享資料夾>/<代號>.git     第一次共享：建立儲存庫並推送，輸出使用者要加進設定檔的內容
+kb push                             把本機的變更推到共享位置
+kb pull                             取得別人推送的變更
+kb clone <共享路徑> <本機資料夾>     其他維護者取得工作複本
+```
+
+- 作業習慣：開始前 `kb pull`，完成後 `kb push`。
+- 別人推送了新變更時，`kb ingest start` 與 `kb push` 會要求先 `kb pull`。
+- 兩位維護者各自做了變更、誰都還沒取得對方的版本時，**不會自動合併**：索引、對應表、log 是產生出來的檔案，
+  兩邊同時修改一定衝突。`kb pull` 會說明處理方式（撤銷本機變更、取得對方版本、重新 ingest）。
+- 共享資料夾的路徑只存在維護者的 git 設定與使用者的 MCP 設定檔，不會寫進知識庫內容。
+- 誰能寫入由共享資料夾的權限決定。`kb.json` 的機密等級是防止誤用的檢查，不是存取控制。
 
 `.kb/provenance.json` 記錄每份來源的 hash、受它影響的頁面、歷次 ingest。每次 ingest 有一個 id，同時寫在 commit 訊息裡，
 用 `git log --grep <id>` 可以找到對應的 commit。

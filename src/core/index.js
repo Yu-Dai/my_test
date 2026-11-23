@@ -16,3 +16,4 @@ export * from './ingest.js';
 export * from './querytest.js';
 export * from './lint.js';
 export * from './undo.js';
+export * from './remote.js';

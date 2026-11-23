@@ -58,10 +58,14 @@ const TOOLS = [
   },
 ];
 
-const { paths, problems } = loadConfig(process.argv.slice(2));
-const mounts = new Mounts(paths, problems);
-for (const p of mounts.problems) console.error(`[wiki-mcp] ${p}`);
-console.error(`[wiki-mcp] 已掛載 ${mounts.names().length} 個知識庫：${mounts.names().join('、') || '（無）'}`);
+const config = loadConfig(process.argv.slice(2));
+// 先用既有的本機快取掛載，馬上可以用；共享知識庫的更新在連線後於背景進行
+const mounts = new Mounts(config.entries, config.problems, { maxConfidentiality: config.maxConfidentiality, cacheDir: config.cacheDir });
+const report = () => {
+  for (const p of mounts.problems) console.error(`[wiki-mcp] ${p}`);
+  console.error(`[wiki-mcp] 已掛載 ${mounts.names().length} 個知識庫：${mounts.names().join('、') || '（無）'}`);
+};
+report();
 
 const server = new McpServer({ name: 'wiki', version: '0.1.0' }, { instructions: SERVER_INSTRUCTIONS });
 for (const tool of TOOLS) {
@@ -79,3 +83,6 @@ for (const tool of TOOLS) {
   );
 }
 await server.connect(new StdioServerTransport());
+if (mounts.entries.some((e) => e.remote)) {
+  mounts.syncAll().then(report, (e) => console.error(`[wiki-mcp] 更新共享知識庫時發生錯誤：${e.stack ?? e}`));
+}

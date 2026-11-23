@@ -8,6 +8,7 @@ import {
   checkKb, findKbRoot, formatReport, loadKb, readSearchIndex, readTextFile, resolveSourceRef,
   searchWiki, staleIndexes, toPosix, validatePage, writeIndexes, pathToPageId, listFiles,
   initKb, ingestAbort, ingestCommit, ingestPart, ingestStart, ingestStatus,
+  cloneKb, pullKb, pushKb, shareKb,
   changes, editCommit, git, isRepoRoot, lintKb, queryTestAdd, queryTestRemove, queryTestRun, undoLast,
 } from '../core/index.js';
 
@@ -29,6 +30,12 @@ const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
   test add --terms "<關鍵字,關鍵字>" --expect <頁面代號> [--rank <名次>]
                         新增檢索測試題
   test remove <題號>    移除檢索測試題
+
+共享指令（共享資料夾上的儲存庫）：
+  share <共享路徑>      第一次把知識庫放上共享資料夾，慣例路徑 <共享資料夾>/<代號>.git
+  push                  把本機的變更推到共享位置
+  pull                  取得共享位置上別人推送的變更
+  clone <共享路徑> <資料夾>  從共享位置取得工作複本（其他維護者用）
 
 查詢與檢查指令：
   check                 只檢查格式（格式、連結、來源引用、索引是否過期）
@@ -81,6 +88,22 @@ const commands = {
     const subs = { start: ingestStart, part: ingestPart, commit: ingestCommit, status: ingestStatus, abort: ingestAbort };
     if (!subs[sub]) fail(`ingest 後面要接 start、part、commit、status、abort 其中之一${sub ? `，目前是「${sub}」` : ''}`, '開始處理來源：kb ingest start <來源檔>');
     return done(subs[sub](needRoot(opts), opts._[0]));
+  },
+
+  share(opts) {
+    return done(shareKb(needRoot(opts), opts._[0]));
+  },
+
+  push(opts) {
+    return done(pushKb(needRoot(opts)));
+  },
+
+  pull(opts) {
+    return done(pullKb(needRoot(opts)));
+  },
+
+  clone(opts) {
+    return done(cloneKb(opts._[0], opts._[1]));
   },
 
   commit(opts) {

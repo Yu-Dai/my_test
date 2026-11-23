@@ -17,7 +17,7 @@ description: 建立與維護 LLM Wiki 知識庫。使用者要求建立知識庫
 
 ## 建立新的知識庫
 
-1. 向使用者問這六項：代號（name）、名稱（title）、一句話描述（description）、擁有者（owner）、分類（category）、機密等級（confidentiality）。
+1. 向使用者問這六項：代號（name）、名稱（title）、一句話描述（description）、擁有者（owner）、分類（category）、機密等級（confidentiality，只能是 `public`、`internal`、`confidential` 其中之一）。
 2. 執行：
 
    ```
@@ -84,6 +84,17 @@ description: 建立與維護 LLM Wiki 知識庫。使用者要求建立知識庫
 
 - `kb undo`：撤銷最近一次 ingest 或 commit。來源檔會留在 `raw/`，可以重新處理。
 - 只在使用者要求時執行。
+
+## 共享知識庫
+
+知識庫可以放到共享資料夾讓其他人使用。只在使用者要求時執行這些指令。
+
+- **開始作業前**：`kb pull`，取得別人推送的變更。
+- **作業完成後**：`kb push`，其他人才看得到。`kb ingest commit` 的輸出會提醒還有幾筆沒推送。
+- 第一次共享：向使用者問共享資料夾的路徑，執行 `kb share <共享資料夾路徑>/<知識庫代號>.git`。
+- 取得別人已共享的知識庫來維護：`kb clone <共享路徑> <本機資料夾>`。
+
+`kb pull` 說「本機與共享位置各自有新的變更」時，把訊息原文轉告使用者，等使用者決定，不要自己處理。
 
 ## 其他指令
 

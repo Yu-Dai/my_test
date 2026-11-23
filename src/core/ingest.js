@@ -17,6 +17,7 @@ import { LOG_PATH, STATE_PATH, TEMPLATE_DIR, appendLog, today } from './init.js'
 import { loadKb } from './kb.js';
 import { listHeadings } from './markdown.js';
 import { PROVENANCE_PATH, hashFile, pendingSources, readProvenance, recordIngest, refreshPages, writeProvenance } from './provenance.js';
+import { remoteStatus } from './remote.js';
 import { searchWiki } from './search.js';
 import { readTextFile, splitLines } from './text.js';
 
@@ -104,6 +105,11 @@ export function ingestStart(root, sourceArg) {
   if (state && state.source !== source) {
     return fail(`上一份來源 ${state.source} 還沒處理完。一次只能處理一份來源`, '先完成它：kb ingest commit；或放棄它：kb ingest abort');
   }
+  // 共享知識庫：別人推送了新變更時，先取得再開始，避免兩邊各做各的
+  const rs = state ? { origin: null } : remoteStatus(root);
+  if (rs.origin && rs.behind > 0) {
+    return fail(`共享位置有 ${rs.behind} 筆別人推送的新變更`, `先執行 kb pull 取得，再執行 kb ingest start ${source}`);
+  }
   const dirty = changedPages(changes(root));
   fs.mkdirSync(abs(root, '.kb'), { recursive: true });
   fs.writeFileSync(abs(root, STATE_PATH), `${JSON.stringify({ source, started: new Date().toISOString() }, null, 2)}\n`);
@@ -123,6 +129,7 @@ export function ingestStart(root, sourceArg) {
 
   const out = [`開始處理來源：${source}（共 ${src.lines.length} 行，分 ${src.parts} 段）`];
   if (known) out.push(known.hash === hash ? '注意：這份來源之前處理過，而且內容沒有變。確定要重做再繼續。' : '這份來源之前處理過，現在內容有更新：請檢查下面「已引用這份來源」的頁面是否需要修改。');
+  if (rs.origin && !rs.reachable) out.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
   if (dirty.length) out.push(`注意：wiki/ 已經有尚未 commit 的變更（${dirty.map((c) => c.path).join('、')}），它們會算進這次 ingest。不想保留就先執行 kb ingest abort。`);
   out.push(
     '',
@@ -327,5 +334,7 @@ function finalize(root, { kind, source, note, cmd }) {
   if (warns.length) out.push('', `有 ${warns.length} 個警告（不影響這次 commit）：`, ...warns.map((i) => `- ${i.file}：${i.message}`));
   if (others.length) out.push('', `以下變更不屬於 ingest，沒有納入 commit：${others.map((c) => c.path).join('、')}`);
   out.push('', pendingText(root, final).text);
+  const rs = remoteStatus(root, { fetch: false });
+  if (rs.origin && rs.ahead > 0) out.push('', `這個知識庫有共享位置，目前有 ${rs.ahead} 筆變更尚未推送。這一批都處理完後執行：kb push`);
   return { code: 0, text: out.join('\n') };
 }

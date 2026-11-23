@@ -1,6 +1,7 @@
 {
+  "max_confidentiality": "internal",
   "knowledge_bases": [
     { "path": "D:/kb/my-notes" },
-    { "path": "D:/kb/uart-driver" }
+    { "remote": "//fileserver/share/kb/uart-driver.git" }
   ]
 }
