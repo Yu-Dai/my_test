@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatReport } from './check.js';
 import { queryTestIssues } from './querytest.js';
-import { LIMITS, MARKDOWN_EXTENSIONS, RAW_EXTENSIONS } from './constants.js';
+import { IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, RAW_EXTENSIONS } from './constants.js';
 import { changes, git, hasIdentity, headShort, isRepoRoot } from './git.js';
 import { pathToPageId } from './ids.js';
 import { buildSearchIndex, writeIndexes } from './indexgen.js';
@@ -17,6 +17,7 @@ import { LOG_PATH, STATE_PATH, TEMPLATE_DIR, appendLog, today } from './init.js'
 import { loadKb } from './kb.js';
 import { listHeadings } from './markdown.js';
 import { PROVENANCE_PATH, hashFile, pendingSources, readProvenance, recordIngest, refreshPages, writeProvenance } from './provenance.js';
+import { adoptImages } from './rawimages.js';
 import { remoteStatus } from './remote.js';
 import { searchWiki } from './search.js';
 import { readTextFile, splitLines } from './text.js';
@@ -94,11 +95,14 @@ export function ingestStart(root, sourceArg) {
     return fail(`找不到來源檔 ${source}`, `確認檔案已放進 raw/。目前 raw/ 有：${kb.rawFiles.join('、') || '（空的）'}`);
   }
   const ext = path.extname(source).toLowerCase();
+  if (IMAGE_EXTENSIONS.includes(ext)) {
+    return fail(`${source} 是圖片，不用單獨處理`, '處理引用這張圖的 .md 來源時，圖片會自動搬到 assets/。執行 kb ingest start 看待處理的來源');
+  }
   if (!RAW_EXTENSIONS.includes(ext)) {
-    return fail(`raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, `請先用 toMarkdown 把 ${source} 轉成 .md，把轉出的 .md 放進 raw/、圖片放進 assets/，並把原檔移出 raw/`);
+    return fail(`raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, `請先把 ${source} 轉成 .md，把轉出的 .md 與圖片資料夾一起放進 raw/，並把原檔移出 raw/`);
   }
   const probe = readTextFile(abs(root, source));
-  if (probe.binary) return fail(`${source} 是二進位內容，不是文字檔`, '請先用 toMarkdown 轉成 .md 再放進 raw/');
+  if (probe.binary) return fail(`${source} 是二進位內容，不是文字檔`, '請先轉成 .md 再放進 raw/');
   if (!probe.validUtf8) return fail(`${source} 不是 UTF-8 編碼`, '請維護者用編輯器把它另存成 UTF-8（無 BOM）再試一次');
 
   const state = readState(root);
@@ -114,7 +118,10 @@ export function ingestStart(root, sourceArg) {
   fs.mkdirSync(abs(root, '.kb'), { recursive: true });
   fs.writeFileSync(abs(root, STATE_PATH), `${JSON.stringify({ source, started: new Date().toISOString() }, null, 2)}\n`);
 
+  // 轉檔輸出的圖片：搬到 assets/，並把來源內的圖片路徑改寫
+  const adopted = MARKDOWN_EXTENSIONS.includes(ext) ? adoptImages(root, source) : { moved: [], missing: [] };
   const src = loadSource(root, source);
+  const hasImages = src.lines.some((l) => /!\[[^\]]*\]\(\s*assets\//.test(l));
   const prov = readProvenance(root);
   const known = prov.sources[source];
   const hash = hashFile(abs(root, source));
@@ -130,6 +137,8 @@ export function ingestStart(root, sourceArg) {
   const out = [`開始處理來源：${source}（共 ${src.lines.length} 行，分 ${src.parts} 段）`];
   if (known) out.push(known.hash === hash ? '注意：這份來源之前處理過，而且內容沒有變。確定要重做再繼續。' : '這份來源之前處理過，現在內容有更新：請檢查下面「已引用這份來源」的頁面是否需要修改。');
   if (rs.origin && !rs.reachable) out.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
+  if (adopted.moved.length) out.push(`已把這份來源引用的 ${adopted.moved.length} 張圖片搬到 ${path.posix.dirname(adopted.moved[0].to)}/，來源內的圖片路徑已改成 assets/ 開頭。`);
+  if (adopted.missing.length) out.push(`注意：來源引用了這些圖片，但找不到檔案：${adopted.missing.join('、')}。頁面不要引用這些圖；請維護者把圖片放到來源旁邊後重新執行 kb ingest start ${source}。`);
   if (dirty.length) out.push(`注意：wiki/ 已經有尚未 commit 的變更（${dirty.map((c) => c.path).join('、')}），它們會算進這次 ingest。不想保留就先執行 kb ingest abort。`);
   out.push(
     '',
@@ -141,6 +150,7 @@ export function ingestStart(root, sourceArg) {
     '   - 下面「可能相關的既有頁面」已經有的主題，打開該檔案修改，不要另開重複的頁面。',
     `   - 每一頁的 sources 都要寫到位置。這份來源的寫法：${src.isMarkdown ? `${source}#章節編號或標題，或 ${source}:L起-L迄` : `${source}:L起-L迄（行數看來源內容左邊的數字）`}`,
     '   - 檔名只能用小寫英數加連字號，中文寫在 title。不要寫 updated 欄位。',
+    ...(hasImages ? ['   - 來源裡有圖片。要把圖放進頁面時，路徑照來源裡的 assets/… 原樣複製，並寫 ![說明這張圖的內容](assets/…)。說明文字必填：你看不到圖，依圖片前後的文字與圖說來寫；前後文沒說明內容的圖就不要放。'] : []),
     '4. 寫完執行：kb ingest commit',
     '   它會檢查所有頁面。有錯誤就照訊息修正，再執行一次 kb ingest commit，直到通過。',
     '不要修改 index.md、log.md、.kb/、raw/ 裡的任何檔案，也不要自己執行 git 指令。',

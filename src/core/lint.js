@@ -46,6 +46,11 @@ export function lintKb(root) {
     }
   }
 
+  // raw/ 裡還沒歸檔的圖片
+  if (kb.rawImages.length) {
+    warn('raw-image', kb.rawImages[0], `raw/ 裡有 ${kb.rawImages.length} 張圖片還沒搬到 assets/：${kb.rawImages.slice(0, 5).join('、')}${kb.rawImages.length > 5 ? ' …' : ''}`, null, '處理引用這些圖的 .md 來源（kb ingest start <來源檔>）時會自動搬移；沒有任何來源引用的圖請維護者移出 raw/');
+  }
+
   // 沒被用到的圖片
   const used = new Set(pages.flatMap((p) => p.images.map((i) => i.path)));
   for (const rel of listFiles(kb.root, 'assets')) {

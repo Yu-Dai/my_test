@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { RAW_EXTENSIONS } from './constants.js';
+import { IMAGE_EXTENSIONS, RAW_EXTENSIONS } from './constants.js';
 import { pathToPageId } from './ids.js';
 import { KB_JSON_EXAMPLE, validateKbJson } from './kbjson.js';
 import { validatePage } from './page.js';
@@ -40,7 +40,7 @@ export function listFiles(root, sub) {
  * 載入並驗證知識庫。
  * @param {string} root
  * @param {{ draftPaths?: Set<string> }} [opts] draftPaths：這些頁面以草稿模式驗證（不要求 updated）
- * @returns {{ root: string, meta: object|null, pages: Map<string, object>, rawFiles: string[], issues: object[] }}
+ * @returns {{ root: string, meta: object|null, pages: Map<string, object>, rawFiles: string[], rawImages: string[], issues: object[] }}
  */
 export function loadKb(root, opts = {}) {
   root = path.resolve(root);
@@ -64,15 +64,18 @@ export function loadKb(root, opts = {}) {
   }
 
   // raw/
-  const rawFiles = listFiles(root, 'raw');
+  // 圖片是轉檔工具連同 .md 一起輸出的，不算來源：處理引用它的 .md 時由 ingest 搬到 assets/
+  const rawAll = listFiles(root, 'raw');
+  const rawImages = rawAll.filter((rel) => IMAGE_EXTENSIONS.includes(path.extname(rel).toLowerCase()));
+  const rawFiles = rawAll.filter((rel) => !rawImages.includes(rel));
   for (const rel of rawFiles) {
     const ext = path.extname(rel).toLowerCase();
     if (!RAW_EXTENSIONS.includes(ext)) {
-      err('raw-ext', rel, `raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, 'PDF、Office 檔請先用 toMarkdown 轉成 .md 再放進 raw/');
+      err('raw-ext', rel, `raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, 'PDF、Office 檔請先轉成 .md，把 .md 與圖片資料夾一起放進 raw/');
       continue;
     }
     const f = readTextFile(path.join(root, rel));
-    if (f.binary) err('raw-binary', rel, '這個檔案是二進位內容，不是文字檔', '請先用 toMarkdown 轉成 .md 再放進 raw/');
+    if (f.binary) err('raw-binary', rel, '這個檔案是二進位內容，不是文字檔', '請先轉成 .md 再放進 raw/');
     else if (!f.validUtf8) err('raw-encoding', rel, '這個檔案不是 UTF-8 編碼', '用編輯器另存成 UTF-8（無 BOM）後再放進 raw/');
   }
 
@@ -98,7 +101,7 @@ export function loadKb(root, opts = {}) {
     if (r.page) pages.set(r.page.id, r.page);
   }
 
-  return { root, meta, pages, rawFiles, issues };
+  return { root, meta, pages, rawFiles, rawImages, issues };
 }
 
 /** 頁面依代號排序後的陣列。 */

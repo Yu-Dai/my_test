@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   LIMITS, checkKb, git, hashFile, ingestAbort, ingestCommit, ingestPart, ingestStart, ingestStatus, initKb,
-  pendingSources, readProvenance, stampUpdated, today,
+  lintKb, pendingSources, readProvenance, stampUpdated, today,
 } from '../src/core/index.js';
 import { CLI, RAW_CODE, RAW_SPEC, makePage } from './helpers.js';
 
@@ -86,7 +86,7 @@ test('ingest start：擋下不合格的來源並提示怎麼處理', () => {
   put(root, 'raw/doc.pdf', '%PDF');
   put(root, 'raw/bin.txt', Buffer.from([1, 0, 2]));
   put(root, 'raw/big5.txt', Buffer.from([0xa4, 0xa4, 0xa4, 0xe5]));
-  const cases = [['raw/doc.pdf', /toMarkdown/], ['raw/bin.txt', /二進位/], ['raw/big5.txt', /不是 UTF-8/], ['raw/nope.md', /找不到來源檔[\s\S]*raw\/spec\.md/], ['raw/../kb.json', /不合法/]];
+  const cases = [['raw/doc.pdf', /轉成 \.md[\s\S]*圖片資料夾/], ['raw/bin.txt', /二進位/], ['raw/big5.txt', /不是 UTF-8/], ['raw/nope.md', /找不到來源檔[\s\S]*raw\/spec\.md/], ['raw/../kb.json', /不合法/]];
   for (const [src, re] of cases) {
     const r = ingestStart(root, src);
     assert.equal(r.code, 1, src);
@@ -343,4 +343,93 @@ test('CLI：init 與 ingest 全流程', () => {
   assert.match(r.stdout, /ingest 完成/);
   assert.match(run(root, 'ingest', 'status').stdout, /都已經處理完了/);
   assert.equal(run(root, 'check').status, 0);
+});
+
+// ------------------------------------------------- 轉檔輸出的圖片（.md + 圖片資料夾）
+
+const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+const MANUAL = [
+  '# 手冊', '', '## 1 接線', '',
+  '![](screenshot/p1.png)', '圖 1：接線圖', '',
+  '![設定 視窗](./screenshot/sub/p%202.png "標題") 與 ![](screenshot\\p1.png)', '',
+  '<img src="screenshot/p3.JPG" width="300">', '',
+  '![外部](https://example.com/x.png) ![已歸檔](assets/old.png) ![不見了](screenshot/gone.png)', '',
+  '```', '![](screenshot/in-code.png)', '```', '',
+].join('\r\n');
+
+function manualKb() {
+  const root = newKb();
+  put(root, 'raw/manual.md', MANUAL);
+  put(root, 'raw/screenshot/p1.png', PNG);
+  put(root, 'raw/screenshot/sub/p 2.png', Buffer.concat([PNG, Buffer.from([2])]));
+  put(root, 'raw/screenshot/p3.JPG', Buffer.concat([PNG, Buffer.from([3])]));
+  put(root, 'raw/screenshot/in-code.png', PNG);
+  return root;
+}
+
+test('raw/ 裡的圖片不算來源，也不是錯誤', () => {
+  const root = manualKb();
+  assert.deepEqual(checkKb(root).issues.filter((i) => i.level === 'error'), []);
+  const list = ingestStart(root).text;
+  assert.match(list, /還有 3 份來源待處理/);
+  assert.doesNotMatch(list, /\.png|\.JPG/);
+  const img = ingestStart(root, 'raw/screenshot/p1.png');
+  assert.equal(img.code, 1);
+  assert.match(img.text, /是圖片，不用單獨處理/);
+  const warn = lintKb(root).issues.find((i) => i.code === 'raw-image');
+  assert.match(warn.message, /raw\/ 裡有 4 張圖片還沒搬到 assets\//);
+});
+
+test('ingest start：把來源引用的圖片搬到 assets/<來源檔名>/ 並改寫路徑', () => {
+  const root = manualKb();
+  const r = ingestStart(root, 'raw/manual.md');
+  assert.equal(r.code, 0, r.text);
+  assert.match(r.text, /已把這份來源引用的 3 張圖片搬到 assets\/manual\/，來源內的圖片路徑已改成 assets\/ 開頭。/);
+  assert.match(r.text, /找不到檔案：screenshot\/gone\.png/);
+  assert.match(r.text, /來源裡有圖片。[\s\S]*說明文字必填/);
+  assert.match(r.text, /!\[\]\(assets\/manual\/p1\.png\)/);
+
+  const md = read(root, 'raw/manual.md');
+  assert.ok(md.includes('![](assets/manual/p1.png)\r\n圖 1：接線圖'), '保留原本的換行');
+  assert.ok(md.includes('![設定 視窗](assets/manual/p-2.png "標題") 與 ![](assets/manual/p1.png)'));
+  assert.ok(md.includes('<img src="assets/manual/p3.jpg" width="300">'));
+  assert.ok(md.includes('![外部](https://example.com/x.png) ![已歸檔](assets/old.png) ![不見了](screenshot/gone.png)'));
+  assert.ok(md.includes('```\r\n![](screenshot/in-code.png)\r\n```'), '程式碼區塊內不改');
+
+  for (const f of ['p1.png', 'p-2.png', 'p3.jpg']) assert.ok(fs.existsSync(path.join(root, 'assets', 'manual', f)), f);
+  // 沒被引用的圖留在原地；搬空的子資料夾被移除
+  assert.deepEqual(fs.readdirSync(path.join(root, 'raw', 'screenshot')), ['in-code.png']);
+
+  // 再執行一次不會重複搬
+  const again = ingestStart(root, 'raw/manual.md');
+  assert.doesNotMatch(again.text, /已把這份來源引用的/);
+  assert.equal(read(root, 'raw/manual.md'), md);
+});
+
+test('ingest commit：搬過去的圖片與改寫後的來源一起 commit，頁面可以引用', () => {
+  const root = manualKb();
+  fs.rmSync(path.join(root, 'raw', 'screenshot', 'in-code.png'));
+  ingestStart(root, 'raw/manual.md');
+  put(root, 'wiki/topic/wiring.md', draft({ sources: '\n  - raw/manual.md#1' }, '## 內容\n\n![接線圖](assets/manual/p1.png)\n\n## 相關頁面\n\n## 來源\n'));
+  const r = ingestCommit(root);
+  assert.equal(r.code, 0, r.text);
+  const files = git(root, ['show', '--name-only', '--format=', 'HEAD']).stdout;
+  for (const f of ['assets/manual/p1.png', 'assets/manual/p-2.png', 'assets/manual/p3.jpg', 'raw/manual.md', 'wiki/topic/wiring.md']) assert.ok(files.includes(f), f);
+  assert.equal(readProvenance(root).sources['raw/manual.md'].hash, hashFile(path.join(root, 'raw', 'manual.md')));
+  assert.equal(pendingSources(root, ['raw/manual.md'], readProvenance(root)).length, 0);
+});
+
+test('搬圖：不同來源的同名圖片各自一個資料夾；同資料夾內名稱相同而內容不同時加編號', () => {
+  const root = newKb();
+  put(root, 'raw/a.md', '![](img/x.png) ![](img2/x.png)\n');
+  put(root, 'raw/b.md', '![](img/x.png)\n');
+  put(root, 'raw/img/x.png', PNG);
+  put(root, 'raw/img2/x.png', Buffer.concat([PNG, Buffer.from([9])]));
+  ingestStart(root, 'raw/a.md');
+  assert.equal(read(root, 'raw/a.md'), '![](assets/a/x.png) ![](assets/a/x-2.png)\n');
+  ingestAbort(root);
+  put(root, 'raw/img/x.png', PNG);
+  ingestStart(root, 'raw/b.md');
+  assert.equal(read(root, 'raw/b.md'), '![](assets/b/x.png)\n');
+  assert.equal(fs.existsSync(path.join(root, 'raw', 'img')), false);
 });

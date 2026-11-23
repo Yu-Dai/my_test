@@ -154,6 +154,7 @@ kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 co
 - AI 只寫 `wiki/` 的頁面。`index.md`、`log.md`、`.kb/` 只由 `kb` 寫入，被手動改過時 `kb ingest commit` 會擋下。
 - 驗證沒過就不會 commit。錯誤訊息固定包含：哪裡不合格、正確寫法、下一步。
 - `raw/` 只收文字檔。PDF、Office 檔要先用其他工具轉成 markdown（轉檔工具另案開發，不在這個專案內）。
+- 來源帶圖片時，把轉檔輸出的 `.md` 與圖片資料夾（例如 `screenshot/`）整包放進 `raw/` 即可。`kb ingest start` 會把該 `.md` 引用到的圖片搬到 `assets/<來源檔名>/`，並把 `.md` 內的圖片路徑改寫成 `assets/…`。
 - 已處理過的來源不可修改。來源有新版時覆蓋原檔，`kb ingest start` 會把它列為「內容有更新」。
 - 單張圖片上限 1 MB，超過會擋下。
 
@@ -217,7 +218,7 @@ node <repo>/src/cli/kb.js resolve <來源引用>       顯示來源引用所指�
 ```
 <知識庫>/
   kb.json      說明檔
-  raw/         原始來源（只收文字檔，放入後不修改）
+  raw/         原始來源（文字檔；隨附的圖片在 ingest 時搬到 assets/）
   wiki/        頁面：wiki/<分類>/<名稱>.md
   assets/      圖片
   SCHEMA.md    給維護 AI 的規則（分類方式、領域用語，維護者可調整）

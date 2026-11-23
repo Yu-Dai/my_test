@@ -42,6 +42,8 @@ description: 建立與維護 LLM Wiki 知識庫。使用者要求建立知識庫
 
 來源檔是 PDF、Word、Excel、PowerPoint 時不能直接處理，`kb ingest start` 會擋下。請使用者先轉成 markdown。
 
+來源帶圖片時（轉檔後的 `.md` 加一個圖片資料夾），使用者把整包放進 `raw/` 即可。`kb ingest start` 會自動把圖片搬到 `assets/`，並改好來源裡的圖片路徑。你不用搬圖片，也不用改路徑：頁面要放圖時，照來源內容裡的 `assets/…` 路徑原樣複製，並寫上說明文字。
+
 想放棄目前這一份、把頁面還原：`kb ingest abort`。
 忘記做到哪裡：`kb ingest status`。
 
