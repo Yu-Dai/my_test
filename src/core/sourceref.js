@@ -75,7 +75,16 @@ export function resolveSourceRef(kbRoot, ref) {
   if (!file.ok) return { ok: false, reason: `${p.path} 不是 UTF-8 文字檔，無法引用` };
   const lines = splitLines(file.text);
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return locateSourceRef(p, lines);
+}
 
+/**
+ * 在已讀進來的來源內容裡找出引用的位置。來源內容不一定來自工作區的檔案（例如舊版）。
+ * @param {{ path: string, kind: 'section', anchor: string } | { path: string, kind: 'lines', start: number, end: number }} p parseSourceRef 的結果
+ * @param {string[]} lines 來源的每一行
+ * @returns {{ ok: true, path: string, startLine: number, endLine: number, heading: string|null, lines: string[] } | { ok: false, reason: string, hint?: string }}
+ */
+export function locateSourceRef(p, lines) {
   if (p.kind === 'lines') {
     if (p.end > lines.length) {
       return { ok: false, reason: `${p.path} 只有 ${lines.length} 行，引用的 L${p.start}-L${p.end} 超出範圍` };

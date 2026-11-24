@@ -7,7 +7,7 @@ import process from 'node:process';
 import {
   checkKb, findKbRoot, formatReport, loadKb, readSearchIndex, readTextFile, resolveSourceRef,
   searchWiki, staleIndexes, toPosix, validatePage, writeIndexes, pathToPageId, listFiles,
-  initKb, ingestAbort, ingestCommit, ingestPart, ingestStart, ingestStatus,
+  initKb, ingestAbort, ingestCommit, ingestKeep, ingestPart, ingestStart, ingestStatus,
   cloneKb, pullKb, pushKb, shareKb,
   changes, editCommit, git, isRepoRoot, lintKb, queryTestAdd, queryTestRemove, queryTestRun, undoLast,
   configGet, configPath, configSet, configUnset, mountAdd, mountDisable, mountEnable, mountList, mountRemove,
@@ -20,6 +20,7 @@ const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
                         建立新的知識庫
   ingest start [來源檔] 開始處理一份來源；不給來源檔則列出待處理的來源
   ingest part <段數>    讀取來源的第幾段（來源較長時）
+  ingest keep <頁面代號...>  更新來源時：這些需要檢查的頁面看過了，不用改
   ingest commit         檢查頁面，通過後更新索引與紀錄並 commit
   ingest status         顯示目前處理到哪裡
   ingest abort          放棄這次處理，把 wiki/ 還原到上一次 commit
@@ -100,7 +101,8 @@ const commands = {
   ingest(opts) {
     const sub = opts._.shift();
     const subs = { start: ingestStart, part: ingestPart, commit: ingestCommit, status: ingestStatus, abort: ingestAbort };
-    if (!subs[sub]) fail(`ingest 後面要接 start、part、commit、status、abort 其中之一${sub ? `，目前是「${sub}」` : ''}`, '開始處理來源：kb ingest start <來源檔>');
+    if (sub === 'keep') return done(ingestKeep(needRoot(opts), opts._));
+    if (!subs[sub]) fail(`ingest 後面要接 start、part、keep、commit、status、abort 其中之一${sub ? `，目前是「${sub}」` : ''}`, '開始處理來源：kb ingest start <來源檔>');
     return done(subs[sub](needRoot(opts), opts._[0]));
   },
 

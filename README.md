@@ -13,7 +13,7 @@
 | wiki MCP server（唯讀，五個工具，本機路徑掛載） | 可用 |
 | MCP 圖片取用（`FetchImage`） | 已實作，尚未實測 agent 平台是否把圖片交給模型 |
 | 維護 skill：init、ingest、commit、lint、query test、undo、rebuild | 可用 |
-| 維護 skill：update（依來源 diff 更新） | 尚未實作 |
+| 維護 skill：update（來源有新版時只處理變動的部分） | 可用 |
 | 共享知識庫（bare repo 遠端、本機快取、掛載檢查） | 可用，尚未在網路共享資料夾上實測 |
 | toMarkdown（PDF、Office 轉 markdown） | 不在這個專案內，另案開發 |
 
@@ -158,6 +158,7 @@ kb init <資料夾> --name <代號> --title "<名稱>" --description "<描述>" 
 kb ingest start                列出待處理的來源
 kb ingest start raw/spec.md    開始處理一份來源：輸出步驟、相關頁面、頁面範本、來源內容
 kb ingest part 2               來源較長時讀取下一段
+kb ingest keep <頁面代號>      更新來源時：這一頁看過了，不用改
 （AI 直接在 wiki/ 新增或修改頁面）
 kb ingest commit               檢查全部頁面；通過才更新索引、對應表、log，並做成一筆 commit
 kb ingest status               顯示目前處理到哪裡
@@ -170,6 +171,17 @@ kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 co
 - `raw/` 只收文字檔。PDF、Office 檔要先用其他工具轉成 markdown（轉檔工具另案開發，不在這個專案內）。
 - 來源帶圖片時，把轉檔輸出的 `.md` 與圖片資料夾（例如 `screenshot/`）整包放進 `raw/` 即可。`kb ingest start` 會把該 `.md` 引用到的圖片搬到 `assets/<來源檔名>/`，並把 `.md` 內的圖片路徑改寫成 `assets/…`。
 - 已處理過的來源不可修改。來源有新版時覆蓋原檔，`kb ingest start` 會把它列為「內容有更新」。
+
+### 來源有新版時
+
+覆蓋 `raw/` 裡的原檔，再執行 `kb ingest start <來源檔>`。它會比對新舊版，只列出變動的部分，不用整份重讀：
+
+- **來源的變更**：舊版拿掉的行與新版加入的行。
+- **需要檢查的頁面**：引用的章節或行數範圍內容有變的頁面。每一頁要嘛修改，要嘛用 `kb ingest keep <頁面代號>` 聲明看過了不用改，否則 `kb ingest commit` 會擋下。
+- **已自動調整行數的頁面**：引用的內容沒變，只是因為前面增刪而移了位置。`kb` 直接把頁面裡的 `:L起-L迄` 改成新的行數，不需要 AI 處理。這是 `kb` 唯一會修改 `wiki/` 頁面內容的情況。
+- **新增的內容**：新版多出來、還沒有任何頁面引用的部分，由 AI 判斷要不要新增頁面。
+
+內容有變的行數引用也會先對應到新版的位置，再交給 AI 檢查。改動幅度太大（變動的行數超過一半，或差異超過 400 行）時不比對，照一般流程整份重新處理。
 - 單張圖片上限 1 MB，超過會擋下。
 
 ### 修改、檢查、撤銷

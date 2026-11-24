@@ -48,4 +48,6 @@ export const LIMITS = {
   ingestPartLines: 300, // ingest 時來源一段幾行
   ingestRelatedPages: 8, // ingest 時列出幾個可能相關的既有頁面
   imageMaxBytes: 1024 * 1024, // 單張圖片大小上限
+  updateMaxChangeRatio: 0.5, // 來源更新時，變動的行數超過這個比例就整份重做
+  updateDiffMaxLines: 400, // 來源更新時，差異超過這麼多行就整份重做
 };

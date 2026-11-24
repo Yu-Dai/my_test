@@ -3,6 +3,9 @@
 // 流程：start（檢查來源、給內容與範本）→ LLM 直接在 wiki/ 新增或修改頁面 → commit（驗證、蓋 updated、
 // 更新索引與對應表與 log、git commit）。驗證沒過就不 commit，LLM 原地修正後再執行 commit。
 // index.md、log.md、.kb/ 只由這裡寫入。
+//
+// 來源有新版時（處理過、內容有變）start 進入更新模式：只給差異與受影響的頁面，見 update.js。
+// 需要檢查的頁面要嘛被修改，要嘛用 kb ingest keep 聲明不用改，否則 commit 會擋下。
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -21,6 +24,7 @@ import { adoptImages } from './rawimages.js';
 import { remoteStatus } from './remote.js';
 import { searchWiki } from './search.js';
 import { readTextFile, splitLines } from './text.js';
+import { contentHash, planUpdate } from './update.js';
 
 const PROTECTED = [LOG_PATH, PROVENANCE_PATH, '.kb/query-tests.json'];
 const fail = (message, next) => ({ code: 1, text: `[錯誤] ${message}${next ? `\n  下一步：${next}` : ''}` });
@@ -71,6 +75,18 @@ function normalizeSource(arg) {
   return s;
 }
 
+function writeState(root, state) {
+  fs.mkdirSync(abs(root, '.kb'), { recursive: true });
+  fs.writeFileSync(abs(root, STATE_PATH), `${JSON.stringify(state, null, 2)}\n`);
+}
+
+/** 更新模式下還沒處理的頁面：需要檢查，但既沒有修改也沒有聲明不用改。 */
+function unreviewed(root, update) {
+  return Object.entries(update.review)
+    .filter(([id, hash]) => !update.kept.includes(id) && fs.existsSync(abs(root, `wiki/${id}.md`)) && contentHash(abs(root, `wiki/${id}.md`)) === hash)
+    .map(([id]) => id);
+}
+
 function changedPages(ch) {
   return ch.filter((c) => c.path.startsWith('wiki/'));
 }
@@ -115,8 +131,8 @@ export function ingestStart(root, sourceArg) {
     return fail(`共享位置有 ${rs.behind} 筆別人推送的新變更`, `先執行 kb pull 取得，再執行 kb ingest start ${source}`);
   }
   const dirty = changedPages(changes(root));
-  fs.mkdirSync(abs(root, '.kb'), { recursive: true });
-  fs.writeFileSync(abs(root, STATE_PATH), `${JSON.stringify({ source, started: new Date().toISOString() }, null, 2)}\n`);
+  const started = state?.started ?? new Date().toISOString();
+  writeState(root, { source, started });
 
   // 轉檔輸出的圖片：搬到 assets/，並把來源內的圖片路徑改寫
   const adopted = MARKDOWN_EXTENSIONS.includes(ext) ? adoptImages(root, source) : { moved: [], missing: [] };
@@ -134,12 +150,53 @@ export function ingestStart(root, sourceArg) {
   const related = [...citing.map((p) => ({ id: p.id, title: p.title, summary: p.summary, cites: true })), ...found.filter((r) => !citing.some((p) => p.id === r.id)).slice(0, LIMITS.ingestRelatedPages)];
   const cats = [...new Set([...kb.pages.keys()].map((id) => id.split('/')[0]))];
 
+  const notices = [];
+  if (rs.origin && !rs.reachable) notices.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
+  if (adopted.moved.length) notices.push(`已把這份來源引用的 ${adopted.moved.length} 張圖片搬到 ${path.posix.dirname(adopted.moved[0].to)}/，來源內的圖片路徑已改成 assets/ 開頭。`);
+  if (adopted.missing.length) notices.push(`注意：來源引用了這些圖片，但找不到檔案：${adopted.missing.join('、')}。頁面不要引用這些圖；請維護者把圖片放到來源旁邊後重新執行 kb ingest start ${source}。`);
+  if (dirty.length && !state?.update) notices.push(`注意：wiki/ 已經有尚未 commit 的變更（${dirty.map((c) => c.path).join('、')}），它們會算進這次 ingest。不想保留就先執行 kb ingest abort。`);
+  const citeHow = src.isMarkdown ? `${source}#章節編號或標題，或 ${source}:L起-L迄` : `${source}:L起-L迄（行數看來源內容左邊的數字）`;
+  const template = [
+    '== 頁面範本 ==',
+    fs.readFileSync(path.join(TEMPLATE_DIR, 'page.md'), 'utf8').replace(/\r\n/g, '\n').trimEnd(),
+    '',
+    'type 只能是：summary（來源摘要）、entity（實體）、concept（概念）、howto（操作步驟）、comparison（比較）。',
+    '',
+  ];
+
+  // 來源有新版：能比對差異就只處理受影響的部分，否則整份重做
+  const update = known && known.hash !== hash ? planUpdate(root, kb, source, known, state?.update ?? null) : null;
+  if (update?.ok) {
+    writeState(root, { source, started, update: { review: update.review, kept: state?.update?.kept ?? [] } });
+    return {
+      code: 0,
+      text: [
+        `開始更新來源：${source}（新版共 ${src.lines.length} 行）。這份來源之前處理過，現在內容有更新，這次只處理有變動的部分。`,
+        ...notices,
+        '',
+        '== 你要做的事 ==',
+        '1. 讀下面「來源的變更」，了解新版改了什麼。',
+        '2. 「需要檢查的頁面」逐頁打開 wiki/<代號>.md，對照變更決定要不要改：',
+        '   - 內容或引用需要改：直接修改檔案。',
+        '   - 看過之後確定不用改：執行 kb ingest keep <頁面代號>。',
+        '3. 「新增的內容」是新版多出來、還沒有任何頁面引用的部分。值得記錄的就新增頁面，或補進既有頁面並在 sources 加上引用。',
+        `   - sources 都要寫到位置。這份來源的寫法：${citeHow}`,
+        '   - 檔名只能用小寫英數加連字號，中文寫在 title。不要寫 updated 欄位。',
+        `4. 需要看新版的完整內容時：kb ingest part 1${src.parts > 1 ? ` … kb ingest part ${src.parts}` : ''}`,
+        '5. 完成後執行：kb ingest commit',
+        '   需要檢查的頁面如果沒有修改、也沒有執行 kb ingest keep，會被擋下。',
+        '不要修改 index.md、log.md、.kb/、raw/ 裡的任何檔案，也不要自己執行 git 指令。',
+        '',
+        ...update.text,
+        ...template,
+        '下一步：處理完「需要檢查的頁面」與「新增的內容」後執行 kb ingest commit。',
+      ].join('\n'),
+    };
+  }
+
   const out = [`開始處理來源：${source}（共 ${src.lines.length} 行，分 ${src.parts} 段）`];
-  if (known) out.push(known.hash === hash ? '注意：這份來源之前處理過，而且內容沒有變。確定要重做再繼續。' : '這份來源之前處理過，現在內容有更新：請檢查下面「已引用這份來源」的頁面是否需要修改。');
-  if (rs.origin && !rs.reachable) out.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
-  if (adopted.moved.length) out.push(`已把這份來源引用的 ${adopted.moved.length} 張圖片搬到 ${path.posix.dirname(adopted.moved[0].to)}/，來源內的圖片路徑已改成 assets/ 開頭。`);
-  if (adopted.missing.length) out.push(`注意：來源引用了這些圖片，但找不到檔案：${adopted.missing.join('、')}。頁面不要引用這些圖；請維護者把圖片放到來源旁邊後重新執行 kb ingest start ${source}。`);
-  if (dirty.length) out.push(`注意：wiki/ 已經有尚未 commit 的變更（${dirty.map((c) => c.path).join('、')}），它們會算進這次 ingest。不想保留就先執行 kb ingest abort。`);
+  if (known) out.push(known.hash === hash ? '注意：這份來源之前處理過，而且內容沒有變。確定要重做再繼續。' : `這份來源之前處理過，現在內容有更新。${update.reason}，這次整份重新處理：請檢查下面「已引用這份來源」的頁面是否需要修改，引用的行數也要重新確認。`);
+  out.push(...notices);
   out.push(
     '',
     '== 你要做的事 ==',
@@ -148,7 +205,7 @@ export function ingestStart(root, sourceArg) {
     '3. 直接在 wiki/<分類>/<名稱>.md 新增或修改頁面，照下面的頁面範本寫。',
     '   - 這份來源寫一頁 type: summary 的摘要頁；其中重要的東西、觀念、步驟各自獨立成頁。',
     '   - 下面「可能相關的既有頁面」已經有的主題，打開該檔案修改，不要另開重複的頁面。',
-    `   - 每一頁的 sources 都要寫到位置。這份來源的寫法：${src.isMarkdown ? `${source}#章節編號或標題，或 ${source}:L起-L迄` : `${source}:L起-L迄（行數看來源內容左邊的數字）`}`,
+    `   - 每一頁的 sources 都要寫到位置。這份來源的寫法：${citeHow}`,
     '   - 檔名只能用小寫英數加連字號，中文寫在 title。不要寫 updated 欄位。',
     ...(hasImages ? ['   - 來源裡有圖片。要把圖放進頁面時，路徑照來源裡的 assets/… 原樣複製，並寫 ![說明這張圖的內容](assets/…)。說明文字必填：你看不到圖，依圖片前後的文字與圖說來寫；前後文沒說明內容的圖就不要放。'] : []),
     '4. 寫完執行：kb ingest commit',
@@ -161,11 +218,7 @@ export function ingestStart(root, sourceArg) {
     '== 可能相關的既有頁面（檔案在 wiki/<代號>.md）==',
     related.length ? related.map((p) => `- ${p.id}｜${p.title}｜${p.summary}${p.cites ? '【已引用這份來源】' : ''}`).join('\n') : '（沒有）',
     '',
-    '== 頁面範本 ==',
-    fs.readFileSync(path.join(TEMPLATE_DIR, 'page.md'), 'utf8').replace(/\r\n/g, '\n').trimEnd(),
-    '',
-    'type 只能是：summary（來源摘要）、entity（實體）、concept（概念）、howto（操作步驟）、comparison（比較）。',
-    '',
+    ...template,
   );
   if (headings.length) out.push('== 來源的章節 ==', ...headings.slice(0, 150).map((h) => `${'  '.repeat(h.level - 1)}- ${h.text}（第 ${h.line} 行）`), '');
   out.push(renderPart(source, src, 1), '');
@@ -186,6 +239,24 @@ export function ingestPart(root, nArg) {
   return { code: 0, text: `${renderPart(state.source, src, n)}\n\n${next}` };
 }
 
+// ----------------------------------------------------------------------- keep
+
+/** kb ingest keep：更新來源時，聲明某些需要檢查的頁面看過了、不用改。 */
+export function ingestKeep(root, idArgs = []) {
+  const state = readState(root);
+  if (!state) return fail('目前沒有正在處理的來源', '先執行：kb ingest start <來源檔>');
+  if (!state.update) return fail('kb ingest keep 只用在更新已處理過的來源時', '寫好頁面後直接執行：kb ingest commit');
+  const ids = idArgs.map((a) => String(a).trim().split('\\').join('/').replace(/^wiki\//, '').replace(/\.md$/i, '')).filter(Boolean);
+  const listed = Object.keys(state.update.review);
+  if (ids.length === 0) return fail('沒有指定頁面代號', `kb ingest keep <頁面代號>。需要檢查的頁面：${listed.join('、') || '（沒有）'}`);
+  const unknown = ids.filter((id) => !listed.includes(id));
+  if (unknown.length) return fail(`${unknown.join('、')} 不在需要檢查的頁面裡`, `需要檢查的頁面：${listed.join('、') || '（沒有）'}`);
+  state.update.kept = [...new Set([...state.update.kept, ...ids])];
+  writeState(root, state);
+  const left = unreviewed(root, state.update);
+  return { code: 0, text: `已記錄：${ids.join('、')} 看過了，不用改。\n${left.length ? `還沒處理的頁面：${left.join('、')}` : '需要檢查的頁面都處理完了。下一步：kb ingest commit'}` };
+}
+
 // --------------------------------------------------------------------- status
 
 export function ingestStatus(root) {
@@ -196,6 +267,10 @@ export function ingestStatus(root) {
   const out = [];
   if (state) {
     const pages = changedPages(changes(root));
+    if (state.update) {
+      const left = unreviewed(root, state.update);
+      out.push(`這次是更新已處理過的來源。${left.length ? `還沒處理的頁面（修改它，或執行 kb ingest keep <頁面代號>）：${left.join('、')}` : '需要檢查的頁面都處理完了。'}`);
+    }
     out.push(`正在處理：${state.source}`, pages.length ? `已變更的頁面：\n${pages.map((c) => `- ${c.path}（${{ added: '新增', modified: '修改', deleted: '刪除' }[c.kind]}）`).join('\n')}` : '還沒有變更任何頁面。', '寫完後執行：kb ingest commit；要放棄：kb ingest abort', '');
   } else out.push('目前沒有正在處理的來源。', '');
   out.push(pendingText(root, kb).text);
@@ -248,7 +323,7 @@ export function ingestCommit(root) {
   if (!state) return fail('目前沒有正在處理的來源，沒有東西可以 commit', '先執行：kb ingest start <來源檔>');
   const { source } = state;
   if (!fs.existsSync(abs(root, source))) return fail(`來源檔 ${source} 不見了`, '把來源檔放回 raw/；或放棄這次處理：kb ingest abort');
-  return finalize(root, { kind: 'ingest', source, cmd: 'kb ingest commit' });
+  return finalize(root, { kind: 'ingest', source, update: state.update ?? null, cmd: 'kb ingest commit' });
 }
 
 /** kb commit：與來源無關的頁面修改（修錯字、補關鍵字、修 lint 找到的問題）。 */
@@ -263,7 +338,7 @@ export function editCommit(root, noteArg) {
 }
 
 /** 驗證、蓋 updated、重建索引、更新對應表與 log、git commit。ingest 與 edit 共用。 */
-function finalize(root, { kind, source, note, cmd }) {
+function finalize(root, { kind, source, note, update = null, cmd }) {
   if (!hasIdentity(root)) return fail('git 還沒設定使用者名稱與信箱，無法建立 commit', `請使用者先執行：git config --global user.name "姓名" 與 git config --global user.email "信箱"，再執行 ${cmd}`);
 
   const ch = changes(root).filter((c) => c.path !== STATE_PATH);
@@ -281,7 +356,8 @@ function finalize(root, { kind, source, note, cmd }) {
   }
 
   const pageChanges = changedPages(ch);
-  if (pageChanges.length === 0) {
+  // 更新來源時可以沒有頁面變更：看過之後都不用改，只需要記下已經處理到新版
+  if (pageChanges.length === 0 && !update) {
     return kind === 'ingest'
       ? fail('wiki/ 沒有任何變更，還沒有寫頁面', `依 kb ingest start ${source} 的說明，在 wiki/<分類>/<名稱>.md 新增或修改頁面，再執行 kb ingest commit`)
       : fail('wiki/ 沒有任何變更，沒有東西可以 commit', '先修改 wiki/ 裡的頁面。要整理新的來源請用 kb ingest start');
@@ -293,7 +369,10 @@ function finalize(root, { kind, source, note, cmd }) {
   const issues = [...kb.issues];
   const liveIds = live.map((c) => pathToPageId(c.path)).filter(Boolean);
   const citing = liveIds.filter((id) => kb.pages.get(id)?.sources.some((s) => s.path === source));
-  if (kind === 'ingest' && citing.length === 0 && !issues.some((i) => i.level === 'error')) {
+  for (const id of update ? unreviewed(root, update) : []) {
+    issues.push({ level: 'error', code: 'update-unreviewed', file: `wiki/${id}.md`, line: null, message: `這一頁引用的來源內容有變，但頁面沒有修改`, example: `對照來源的變更修改這一頁；看過之後確定不用改，就執行 kb ingest keep ${id}`, next: again });
+  }
+  if (kind === 'ingest' && !update && citing.length === 0 && !issues.some((i) => i.level === 'error')) {
     issues.push({ level: 'error', code: 'ingest-no-citation', file: live[0]?.path ?? 'wiki/', line: null, message: `這次變更的頁面沒有任何一頁在 sources 引用 ${source}`, example: `sources:\n  - ${source}${MARKDOWN_EXTENSIONS.includes(path.extname(source).toLowerCase()) ? '#章節編號或標題' : ':L起-L迄'}`, next: again });
   }
   for (const c of ch.filter((x) => x.path.startsWith('assets/') && x.kind !== 'deleted')) {

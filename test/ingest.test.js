@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  LIMITS, checkKb, git, hashFile, ingestAbort, ingestCommit, ingestPart, ingestStart, ingestStatus, initKb,
+  LIMITS, checkKb, git, hashFile, ingestAbort, ingestCommit, ingestKeep, ingestPart, ingestStart, ingestStatus, initKb, mapRange, parseHunks,
   lintKb, pendingSources, readProvenance, stampUpdated, today,
 } from '../src/core/index.js';
 import { CLI, RAW_CODE, RAW_SPEC, makePage } from './helpers.js';
@@ -280,7 +280,8 @@ test('來源更新後列為待處理，重新 ingest 時提示已引用的頁面
   assert.match(ingestStart(root).text, /- raw\/spec\.md（內容有更新）/);
   const start = ingestStart(root, 'raw/spec.md').text;
   assert.match(start, /現在內容有更新/);
-  assert.match(start, /- topic\/alpha｜測試頁｜一句話摘要【已引用這份來源】/);
+  assert.match(start, /== 沒有受影響的頁面（不用處理）==\ntopic\/alpha/);
+  assert.match(start, /== 新增的內容（沒有任何頁面引用）==\n- 第 1[5-9]-19 行/);
   put(root, 'wiki/topic/alpha.md', read(root, 'wiki/topic/alpha.md').replace('  - raw/spec.md#2.1', '  - raw/spec.md#2.1\n  - raw/spec.md#新章節'));
   const r = ingestCommit(root);
   assert.equal(r.code, 0, r.text);
@@ -289,6 +290,155 @@ test('來源更新後列為待處理，重新 ingest 時提示已引用的頁面
   assert.notEqual(entry.ingests[0].hash, entry.ingests[1].hash);
   assert.equal(entry.hash, entry.ingests[1].hash);
   assert.deepEqual(entry.ingests[1].updated, ['topic/alpha']);
+});
+
+// --------------------------------------------------------------------- update
+
+test('parseHunks／mapRange：位移、範圍內有變、整段被刪', () => {
+  const hunks = parseHunks(['diff --git a/x b/x', '@@ -2,0 +3,2 @@', '+a', '@@ -10 +12 @@ ctx', '-x', '+y', '@@ -20,3 +21,0 @@', '-1'].join('\n'));
+  assert.deepEqual(hunks, [
+    { oldStart: 2, oldCount: 0, newStart: 3, newCount: 2 },
+    { oldStart: 10, oldCount: 1, newStart: 12, newCount: 1 },
+    { oldStart: 20, oldCount: 3, newStart: 21, newCount: 0 },
+  ]);
+  assert.deepEqual(mapRange(hunks, 1, 2), { start: 1, end: 2, changed: false, deleted: false });
+  assert.deepEqual(mapRange(hunks, 3, 9), { start: 5, end: 11, changed: false, deleted: false });
+  // 新增的行插在範圍中間
+  assert.deepEqual(mapRange(hunks, 1, 3), { start: 1, end: 5, changed: true, deleted: false });
+  assert.deepEqual(mapRange(hunks, 9, 11), { start: 11, end: 13, changed: true, deleted: false });
+  assert.deepEqual(mapRange(hunks, 19, 23), { start: 21, end: 22, changed: true, deleted: false });
+  assert.equal(mapRange(hunks, 20, 22).deleted, true);
+  assert.equal(mapRange(hunks, 21, 21).deleted, true);
+  assert.deepEqual(mapRange(hunks, 23, 30), { start: 22, end: 29, changed: false, deleted: false });
+});
+
+const CODE_V1 = Array.from({ length: 12 }, (_, i) => `int v${i + 1};`).join('\n') + '\n';
+const codePage = (title, refs) => draft({ title, sources: refs.map((r) => `\n  - ${r}`).join('') }, `## 內容\n\n${title}的內文。\n\n## 相關頁面\n\n- 無\n\n## 來源\n\n${refs.map((r) => `- ${r}`).join('\n')}\n`);
+
+/** 一份程式碼來源與三頁：引用前段、中段、後段。 */
+function codeKb() {
+  const root = path.join(tmp(), 'kb');
+  assert.equal(initKb(root, FIELDS).code, 0);
+  put(root, 'raw/code.c', CODE_V1);
+  ingestStart(root, 'raw/code.c');
+  put(root, 'wiki/code/head.md', codePage('前段', ['raw/code.c:L1-L2']));
+  put(root, 'wiki/code/mid.md', codePage('中段', ['raw/code.c:L5-L7']));
+  put(root, 'wiki/code/tail.md', codePage('後段', ['raw/code.c:L10-L12', 'raw/code.c:L12']));
+  const r = ingestCommit(root);
+  assert.equal(r.code, 0, r.text);
+  return root;
+}
+
+test('update：行數位移的引用自動改寫，內容有變的頁面列為需要檢查', () => {
+  const root = codeKb();
+  const lines = CODE_V1.trimEnd().split('\n');
+  lines.splice(2, 0, '// 新增一', '// 新增二'); // 在第 2 行之後加兩行
+  lines[7] = 'long v6;'; // 原本的第 6 行
+  put(root, 'raw/code.c', `${lines.join('\n')}\n`);
+
+  const start = ingestStart(root, 'raw/code.c');
+  assert.equal(start.code, 0);
+  assert.match(start.text, /開始更新來源：raw\/code\.c[\s\S]*這次只處理有變動的部分/);
+  assert.match(start.text, /@@ 在舊版第 2 行之後 → 新版第 3-4 行\n\+ {5}3 {2}\/\/ 新增一/);
+  assert.match(start.text, /@@ 舊版第 6 行 → 新版第 8 行\n- {8}int v6;\n\+ {5}8 {2}long v6;/);
+  assert.match(start.text, /== 需要檢查的頁面（引用的內容有變）==\n- code\/mid｜中段\n {4}raw\/code\.c:L5-L7（已改成 raw\/code\.c:L7-L9）：這個範圍的內容有變/);
+  assert.match(start.text, /== 已自動調整行數的頁面[^\n]*\n- code\/tail｜後段/);
+  assert.match(start.text, /== 沒有受影響的頁面（不用處理）==\ncode\/head/);
+  assert.match(start.text, /== 新增的內容（沒有任何頁面引用）==\n- 第 3-4 行/);
+  assert.doesNotMatch(start.text, /== 來源內容 /);
+  // 頁面裡的引用已經改好，開頭欄位與內文兩處都改
+  assert.equal(read(root, 'wiki/code/tail.md').match(/raw\/code\.c:L12-L14/g).length, 2);
+  assert.equal(read(root, 'wiki/code/tail.md').match(/raw\/code\.c:L14(?!\d)/g).length, 2);
+  assert.match(read(root, 'wiki/code/mid.md'), /raw\/code\.c:L7-L9/);
+  assert.match(read(root, 'wiki/code/head.md'), /raw\/code\.c:L1-L2/);
+
+  // 重新 start 不會再位移一次
+  const tail = read(root, 'wiki/code/tail.md');
+  assert.match(ingestStart(root, 'raw/code.c').text, /code\/mid｜中段/);
+  assert.equal(read(root, 'wiki/code/tail.md'), tail);
+  assert.match(ingestStatus(root).text, /還沒處理的頁面[^\n]*：code\/mid/);
+
+  // 需要檢查的頁面沒處理就擋下
+  const blocked = ingestCommit(root);
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.text, /wiki\/code\/mid\.md[\s\S]*引用的來源內容有變，但頁面沒有修改[\s\S]*kb ingest keep code\/mid/);
+  assert.equal(commits(root).length, 2);
+
+  put(root, 'wiki/code/mid.md', read(root, 'wiki/code/mid.md').replace('中段的內文。', '中段的內文，v6 改成 long。'));
+  const done = ingestCommit(root);
+  assert.equal(done.code, 0, done.text);
+  assert.match(done.text, /更新 2 頁：code\/mid、code\/tail/);
+  assert.deepEqual(checkKb(root).issues, []);
+  assert.deepEqual(pendingSources(root, ['raw/code.c'], readProvenance(root)), []);
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+});
+
+test('update：看過不用改的頁面用 keep 聲明；完全沒有頁面變更也能 commit', () => {
+  const root = codeKb();
+  put(root, 'raw/code.c', CODE_V1.replace('int v6;', 'int v6; // 註解'));
+  assert.match(ingestKeep(root, ['code/mid']).text, /目前沒有正在處理的來源/);
+  const start = ingestStart(root, 'raw/code.c').text;
+  assert.match(start, /- code\/mid｜中段\n {4}raw\/code\.c:L5-L7：這個範圍的內容有變/);
+  assert.doesNotMatch(start, /== 已自動調整行數的頁面|== 新增的內容/);
+
+  assert.match(ingestKeep(root, []).text, /沒有指定頁面代號[\s\S]*需要檢查的頁面：code\/mid/);
+  assert.match(ingestKeep(root, ['code/head']).text, /code\/head 不在需要檢查的頁面裡/);
+  assert.equal(ingestCommit(root).code, 1);
+  const kept = ingestKeep(root, ['wiki/code/mid.md']);
+  assert.equal(kept.code, 0);
+  assert.match(kept.text, /需要檢查的頁面都處理完了/);
+  const done = ingestCommit(root);
+  assert.equal(done.code, 0, done.text);
+  assert.equal(readProvenance(root).sources['raw/code.c'].ingests.length, 2);
+  assert.deepEqual(pendingSources(root, ['raw/code.c'], readProvenance(root)), []);
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+
+  // 一般的 ingest 不能用 keep
+  put(root, 'raw/other.c', 'int z;\n');
+  ingestStart(root, 'raw/other.c');
+  assert.match(ingestKeep(root, ['code/mid']).text, /只用在更新已處理過的來源時/);
+});
+
+test('update：引用的內容被刪除、章節內容有變、章節不見', () => {
+  const root = newKb();
+  fs.rmSync(path.join(root, 'raw', 'code.c'));
+  ingestStart(root, 'raw/spec.md');
+  put(root, 'wiki/topic/alpha.md', draft({ title: '阿法', sources: '\n  - raw/spec.md#2.1' }));
+  put(root, 'wiki/topic/beta.md', draft({ title: '貝他', sources: '\n  - raw/spec.md#附錄\n  - raw/spec.md:L5' }, '## 內容\n\n貝他的內文。\n\n## 相關頁面\n\n- [[topic/alpha]]\n\n## 來源\n\n- raw/spec.md#附錄\n'));
+  put(root, 'wiki/topic/gamma.md', draft({ title: '甘瑪', sources: '\n  - raw/spec.md#1' }, '## 內容\n\n甘瑪的內文。\n\n## 相關頁面\n\n- [[topic/alpha]]\n\n## 來源\n\n- raw/spec.md#1\n'));
+  assert.equal(ingestCommit(root).code, 0);
+
+  // 改 2.1 的內容、刪掉附錄與第 5 行的概觀內容
+  put(root, 'raw/spec.md', RAW_SPEC.replace('暫存器內容', '暫存器內容（新版）').replace('概觀內容\n\n', '').replace('## 附錄\n\n附錄內容\n', ''));
+  const start = ingestStart(root, 'raw/spec.md').text;
+  assert.match(start, /- topic\/alpha｜阿法\n {4}raw\/spec\.md#2\.1：這個章節的內容有變（新版第 \d+-\d+ 行）/);
+  assert.match(start, /- topic\/beta｜貝他\n {4}raw\/spec\.md:L5：引用的內容在新版已經被刪除[^\n]*\n {4}raw\/spec\.md#附錄：新版找不到這個章節/);
+  assert.match(start, /- topic\/gamma｜甘瑪\n {4}raw\/spec\.md#1：這個章節的內容有變/);
+  assert.match(start, /（章節：2\.1 暫存器）/);
+});
+
+test('update：改動幅度太大，或找不到舊版時，整份重做', () => {
+  const root = codeKb();
+  put(root, 'raw/code.c', Array.from({ length: 12 }, (_, i) => `float w${i};`).join('\n') + '\n');
+  const start = ingestStart(root, 'raw/code.c').text;
+  assert.match(start, /開始處理來源：raw\/code\.c/);
+  assert.match(start, /來源改動的幅度很大（變動 24 行）[^\n]*這次整份重新處理/);
+  assert.match(start, /== 來源內容 raw\/code\.c 第 1\/1 段/);
+  assert.match(start, /code\/mid｜中段｜一句話摘要【已引用這份來源】/);
+  assert.match(read(root, 'wiki/code/tail.md'), /raw\/code\.c:L10-L12/);
+  // 整份重做時沒有「需要檢查的頁面」，照一般 ingest 的規則
+  assert.match(ingestCommit(root).text, /wiki\/ 沒有任何變更/);
+});
+
+test('update：開始前就有未 commit 修改的頁面不自動改寫，列為需要檢查', () => {
+  const root = codeKb();
+  put(root, 'wiki/code/tail.md', read(root, 'wiki/code/tail.md').replace('後段的內文。', '後段的內文（手動改過）。'));
+  put(root, 'raw/code.c', `// 檔頭\n${CODE_V1}`);
+  const start = ingestStart(root, 'raw/code.c').text;
+  assert.match(start, /@@ 在舊版開頭 → 新版第 1 行/);
+  assert.match(start, /- code\/tail｜後段\n {4}這一頁在開始前就有尚未 commit 的修改，行數引用沒有自動調整/);
+  assert.match(read(root, 'wiki/code/tail.md'), /raw\/code\.c:L10-L12/);
+  assert.match(read(root, 'wiki/code/mid.md'), /raw\/code\.c:L6-L8/);
 });
 
 // ---------------------------------------------------------------------- abort

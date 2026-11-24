@@ -12,6 +12,7 @@ export * from './check.js';
 export * from './git.js';
 export * from './provenance.js';
 export * from './init.js';
+export * from './update.js';
 export * from './ingest.js';
 export * from './querytest.js';
 export * from './lint.js';
