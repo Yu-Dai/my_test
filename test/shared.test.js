@@ -29,11 +29,11 @@ const draft = (fm = {}) => makePage({ updated: undefined, sources: '\n  - raw/sp
 const head = (dir) => git(dir, ['rev-parse', 'HEAD']).stdout.trim();
 
 /** 模擬的環境：共享資料夾 share/、維護者甲的工作複本 a/（已 ingest 一頁）。 */
-function world({ shared = true } = {}) {
+function world({ shared = true, name = FIELDS.name } = {}) {
   const base = tmp();
   const a = path.join(base, 'a');
   const remote = path.join(base, 'share', 'shared-kb.git');
-  assert.equal(initKb(a, FIELDS).code, 0);
+  assert.equal(initKb(a, { ...FIELDS, name }).code, 0);
   put(a, 'raw/spec.md', RAW_SPEC);
   ingestStart(a, 'raw/spec.md');
   put(a, 'wiki/topic/alpha.md', draft({ title: '阿法' }));
@@ -118,8 +118,8 @@ test('share：位置不合適時擋下，且不留下設定', () => {
   const occupied = path.join(base, 'occupied');
   put(occupied, 'file.txt', 'x');
   assert.match(shareKb(a, occupied).text, /已經存在，而且不是共享儲存庫/);
-  // 那個位置已經是別的知識庫
-  const other = world();
+  // 那個位置已經是別的知識庫。代號要不同：同一秒內建立的同內容知識庫 commit 會完全相同，推送會被當成已是最新
+  const other = world({ name: 'other-kb' });
   const r = shareKb(a, other.remote);
   assert.equal(r.code, 1);
   assert.match(r.text, /已經有別的知識庫的內容[\s\S]*kb clone/);
