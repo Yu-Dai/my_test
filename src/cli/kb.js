@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {
-  checkKb, findKbRoot, formatReport, loadKb, readSearchIndex, readTextFile, resolveSourceRef,
+  checkKb, findKbRoot, formatReport, grepSearch, loadKb, readFilesForGrep, readSearchIndex, readTextFile, resolveSourceRef, LIMITS,
   searchWiki, staleIndexes, toPosix, validatePage, writeIndexes, pathToPageId, listFiles,
   initKb, ingestAbort, ingestCommit, ingestKeep, ingestPart, ingestStart, ingestStatus,
   cloneKb, pullKb, pushKb, shareKb,
@@ -56,6 +56,7 @@ const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
   validate <頁面檔>     檢查單一頁面；加 --draft 表示尚未由腳本填 updated
   rebuild               重新產生 index.md 與 .kb/search-index.json
   search <關鍵字...>    搜尋頁面；可加 --limit <筆數>
+  search --grep <樣式>  用 regex 逐行比對頁面，列出命中的行；加 --scope raw 改比對原始來源檔
   info                  顯示知識庫名片與頁數
   resolve <來源引用>    顯示來源引用所指的內容，例如 raw/spec.md#3.2
 
@@ -92,6 +93,32 @@ const done = (r) => {
   (r.code === 0 ? console.log : console.error)(r.text);
   return r.code;
 };
+
+/** kb search --grep：用 regex 逐行比對頁面檔或原始來源檔。 */
+function grepCommand(root, opts, scope) {
+  const pattern = opts.grep ?? '';
+  const example = 'kb search --grep "uart_\\w+_init" --scope raw';
+  if (!pattern.trim() || opts._.length > 0) fail('--grep 後面要接一個樣式，而且不能再加關鍵字', `樣式有空白或特殊符號時用引號包起來，例如：${example}`);
+  if (pattern.length > LIMITS.grepMaxPatternChars) fail(`樣式太長（上限 ${LIMITS.grepMaxPatternChars} 字）`, '改用較短的樣式');
+  const kb = loadKb(root);
+  const files = readFilesForGrep(root, scope === 'raw' ? kb.rawFiles : listFiles(root, 'wiki').filter((f) => pathToPageId(f)));
+  const found = grepSearch([{ kb: null, files }], pattern);
+  if (!found.ok) fail(found.reason === 'timeout' ? `${found.message}，已中止。這個樣式太複雜` : `無法比對：${found.message}`, '改用較簡單的樣式，或改用關鍵字：kb search <關鍵字>');
+  if (found.literal) console.log('注意：這個樣式不是合法的 regex，已當成一般文字比對。');
+  if (found.total === 0) {
+    console.log(`查無結果：${pattern}`);
+    console.log(`  下一步：放寬樣式（不分大小寫，一次比對一行）；${scope === 'raw' ? '或去掉 --scope raw 比對頁面' : '或加上 --scope raw 比對原始來源檔'}`);
+    return 0;
+  }
+  const limit = opts.limit ? Number(opts.limit) : LIMITS.searchDefaultLimit;
+  const shown = found.results.slice(0, limit);
+  shown.forEach((r, i) => {
+    console.log(`${i + 1}. ${r.path}（命中 ${r.hitCount} 行${r.hitCount > r.hits.length ? `，顯示前 ${r.hits.length} 行` : ''}）`);
+    for (const h of r.hits) console.log(`   L${h.line}: ${h.text}`);
+  });
+  if (found.total > shown.length) console.log(`\n共 ${found.total} 個檔案，只顯示前 ${shown.length} 個。要看更多：加上 --limit ${found.total}，或用更精確的樣式`);
+  return 0;
+}
 
 const commands = {
   init(opts) {
@@ -217,7 +244,11 @@ const commands = {
 
   search(opts) {
     const root = needRoot(opts);
-    if (opts._.length === 0) fail('沒有給關鍵字', 'kb search <關鍵字> [更多關鍵字...]，多個關鍵字任一命中即算');
+    const scope = opts.scope ?? 'wiki';
+    if (scope !== 'wiki' && scope !== 'raw') fail(`--scope 只能是 wiki 或 raw，目前是「${scope}」`, 'kb search --grep <樣式> --scope raw');
+    if (opts.grep !== undefined) return grepCommand(root, opts, scope);
+    if (scope === 'raw') fail('--scope raw 要搭配 --grep 使用', 'kb search --grep <樣式> --scope raw');
+    if (opts._.length === 0) fail('沒有給關鍵字', 'kb search <關鍵字> [更多關鍵字...]，多個關鍵字任一命中即算；用 regex 比對：kb search --grep <樣式>');
     const index = readSearchIndex(root);
     if (!index) fail('找不到搜尋索引 .kb/search-index.json', '執行：kb rebuild');
     const { results, total } = searchWiki([index], opts._, { limit: opts.limit ? Number(opts.limit) : undefined });

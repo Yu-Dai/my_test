@@ -113,13 +113,16 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
 | 工具 | 參數 | 用途 |
 | --- | --- | --- |
 | `GetWikiInfo` | `kb`、`category`、`offset`（皆可省略） | 不帶參數列出所有知識庫；帶 `kb` 列出頁面目錄，頁數多時先回分類大綱 |
-| `SearchWiki` | `terms`、`kb`、`scope`、`limit`、`offset` | 關鍵字搜尋，任一命中即算。`scope` 為 `wiki`（預設）或 `raw` |
+| `SearchWiki` | `terms` 或 `pattern`、`kb`、`scope`、`limit`、`offset` | `terms`：關鍵字搜尋，任一命中即算。`pattern`：regex 逐行比對，列出命中的行。`scope` 為 `wiki`（預設）或 `raw` |
 | `ReadWiki` | `kb`、`pages` | 讀取頁面全文，附該頁連到的頁面與來源清單 |
 | `FetchRaw` | `kb`、`path`、`section`、`start_line`、`end_line` | 讀取原始來源檔的指定章節或行數範圍 |
 | `FetchImage` | `kb`、`path` | 讀取頁面裡的一張圖片，以 MCP 的圖片內容回傳 |
 
 典型流程：`GetWikiInfo` → `SearchWiki` 或從目錄挑頁 → `ReadWiki` → 內容不足時 `FetchRaw`，需要看圖時 `FetchImage`。
 
+- `SearchWiki` 兩種搜尋方式擇一：`terms` 適合找主題（依標題、關鍵字、摘要、內文加權排序）；
+  `pattern` 適合找有固定格式的東西（函式名、暫存器位址、錯誤碼），不分大小寫、一次比對一行，找程式碼時加 `scope="raw"`。
+  樣式寫錯時會當成一般文字比對；比對超過 3 秒會中止並請模型換較簡單的樣式。
 - 每個工具都有輸出上限，超過時截斷並說明如何取得後續。
 - 查無結果或參數錯誤時，回傳會給下一步建議。
 - 知識庫內容變動（`kb rebuild` 之後）會自動重新載入，不需要重啟 server。
@@ -238,6 +241,7 @@ node <repo>/src/cli/kb.js check                    檢查整個知識庫
 node <repo>/src/cli/kb.js validate <頁面檔>        檢查單一頁面
 node <repo>/src/cli/kb.js rebuild                  重新產生 index.md 與搜尋索引
 node <repo>/src/cli/kb.js search <關鍵字...>       搜尋頁面
+node <repo>/src/cli/kb.js search --grep <樣式>     用 regex 逐行比對頁面；加 --scope raw 比對原始來源檔
 node <repo>/src/cli/kb.js info                     顯示知識庫名片
 node <repo>/src/cli/kb.js resolve <來源引用>       顯示來源引用所指的內容
 ```

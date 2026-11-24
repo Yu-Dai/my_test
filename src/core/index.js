@@ -8,6 +8,7 @@ export * from './kbjson.js';
 export * from './kb.js';
 export * from './indexgen.js';
 export * from './search.js';
+export * from './grep.js';
 export * from './check.js';
 export * from './git.js';
 export * from './provenance.js';

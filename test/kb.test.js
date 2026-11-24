@@ -140,6 +140,16 @@ test('CLI：check、rebuild、validate、search、resolve', () => {
   assert.match(r.stdout, /1\. topic\/alpha/);
   assert.match(kbCli(root, 'search', '沒有').stdout, /查無結果/);
 
+  r = kbCli(root, 'search', '--grep', 'int [bd];', '--scope', 'raw');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /1\. raw\/code\.c（命中 2 行）\n {3}L2: int b;\n {3}L4: int d;/);
+  assert.match(kbCli(root, 'search', '--grep', '一句話.{2}').stdout, /1\. wiki\/topic\/alpha\.md（命中 1 行）\n {3}L4: summary: 一句話摘要/);
+  assert.match(kbCli(root, 'search', '--grep', 'int b(').stdout, /查無結果[\s\S]*--scope raw/);
+  assert.match(kbCli(root, 'search', '--grep', 'int b(', '--scope', 'raw').stdout, /已當成一般文字比對/);
+  assert.equal(kbCli(root, 'search', '--grep', 'x', 'extra').status, 2);
+  assert.equal(kbCli(root, 'search', 'x', '--scope', 'raw').status, 2);
+  assert.equal(kbCli(root, 'search', '--grep', 'x', '--scope', 'all').status, 2);
+
   r = kbCli(root, 'resolve', 'raw/code.c:L2-L3');
   assert.match(r.stdout, /第 2-3 行/);
   r = kbCli(root, 'resolve', 'raw/spec.md#9');

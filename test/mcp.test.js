@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { LIMITS } from '../src/core/index.js';
+import { LIMITS, compilePattern, grepLines, grepSearch } from '../src/core/index.js';
 import { loadConfig } from '../src/mcp/config.js';
 import { Mounts } from '../src/mcp/mounts.js';
 import { fetchImage, fetchRaw, getWikiInfo, normalizePageRef, readWiki, searchWikiTool } from '../src/mcp/tools.js';
@@ -140,8 +140,9 @@ test('SearchWiki：查無結果與參數錯誤都給下一步', () => {
   assert.match(none, /查無結果/);
   assert.match(none, /scope="raw"/);
   assert.match(none, /不指定 kb/);
-  assert.match(searchWikiTool(m, {}), /缺少 terms/);
-  assert.match(searchWikiTool(m, { terms: [] }), /缺少 terms/);
+  assert.match(searchWikiTool(m, {}), /缺少 terms 或 pattern/);
+  assert.match(searchWikiTool(m, { terms: [] }), /缺少 terms 或 pattern/);
+  assert.match(none, /改用樣式比對：SearchWiki\(pattern=/);
   assert.match(searchWikiTool(m, { terms: ['a'], scope: 'all' }), /scope 只能是/);
   assert.match(searchWikiTool(m, { terms: ['a'], kb: 'nope' }), /可用的知識庫代號/);
 });
@@ -155,6 +156,64 @@ test('SearchWiki：scope=raw 搜尋原始檔並指向 FetchRaw', () => {
   // 只在 raw 出現、頁面沒寫到的詞
   assert.match(searchWikiTool(m, { terms: ['irq_enable'] }), /查無結果/);
   assert.match(searchWikiTool(m, { terms: ['irq_enable'], scope: 'raw' }), /raw\/uart_drv\.c/);
+});
+
+test('grep：樣式編譯、逐行比對、全形半形、排序', () => {
+  assert.equal(compilePattern('uart_\\w+').literal, false);
+  // 嚴格模式不接受的多餘跳脫，寬鬆模式可以
+  assert.equal(compilePattern('a\\_b').literal, false);
+  assert.equal(compilePattern('init(').literal, true);
+  assert.ok(compilePattern('init(').re.test('uart_INIT(x)'));
+
+  const sources = [{ kb: 'k', files: [
+    { path: 'raw/a.c', text: 'int uart_init(void);\nint x;\nvoid UART_Write(int c);\n' },
+    { path: 'raw/b.c', text: '// ＵＡＲＴ＿ｉｎｉｔ 全形\n' },
+    { path: 'raw/c.c', text: 'nothing\n' },
+  ] }];
+  const r = grepLines(sources, 'uart_\\w+');
+  assert.deepEqual(r.results.map((x) => [x.path, x.hitCount]), [['raw/a.c', 2], ['raw/b.c', 1]]);
+  assert.deepEqual(r.results[0].hits, [{ line: 1, text: 'int uart_init(void);' }, { line: 3, text: 'void UART_Write(int c);' }]);
+  assert.equal(r.total, 2);
+  // 每個檔案只列前幾行，但命中行數照實計算
+  const many = grepLines([{ kb: null, files: [{ path: 'raw/m.c', text: 'x\n'.repeat(20) }] }], 'x');
+  assert.equal(many.results[0].hitCount, 20);
+  assert.equal(many.results[0].hits.length, LIMITS.grepHitsPerFile);
+  // 透過子行程執行的結果相同
+  assert.deepEqual(grepSearch(sources, 'uart_\\w+'), { ok: true, ...r });
+});
+
+test('grep：樣式太複雜時逾時中止，不會卡住', () => {
+  const sources = [{ kb: null, files: [{ path: 'raw/a.txt', text: `${'a'.repeat(60)}!\n` }] }];
+  const started = Date.now();
+  const r = grepSearch(sources, '(a+)+$');
+  assert.deepEqual({ ok: r.ok, reason: r.reason }, { ok: false, reason: 'timeout' });
+  assert.ok(Date.now() - started < LIMITS.grepTimeoutMs + 3000);
+  const m = new Mounts([makeKb({ 'raw/slow.txt': `${'a'.repeat(60)}!\n` })]);
+  assert.match(searchWikiTool(m, { pattern: '(a+)+$', scope: 'raw' }), /比對超過 \d+ 秒，已中止[\s\S]*改用較簡單的樣式，或改用 terms 關鍵字搜尋/);
+});
+
+test('SearchWiki：pattern 逐行比對頁面與原始檔，並指向下一步', () => {
+  const m = sample();
+  const raw = searchWikiTool(m, { pattern: 'uart_\\w+_irq', scope: 'raw' });
+  assert.match(raw, /用樣式 "uart_\\\\w\+_irq" 比對（全部 1 個知識庫，原始來源檔）：共 \d+ 個檔案、\d+ 行命中/);
+  assert.match(raw, /1\. 知識庫 sample-uart｜raw\/uart_drv\.c（命中 \d+ 行/);
+  assert.match(raw, /\n {3}L\d+: .*uart_\w+_irq/i);
+  assert.match(raw, /下一步：FetchRaw\(kb="sample-uart", path="raw\/uart_drv\.c", start_line=\d+, end_line=\d+\)/);
+
+  const wiki = searchWikiTool(m, { pattern: '0x0[48]\\b', limit: 2 });
+  assert.match(wiki, /（全部 1 個知識庫，頁面）：共 \d+ 個頁面、\d+ 行命中，顯示第 1-2 個。/);
+  assert.match(wiki, /1\. 知識庫 sample-uart｜頁面 uart\/[a-z-]+｜\S+/);
+  assert.match(wiki, /還有 \d+ 個頁面：再呼叫一次並加上 offset=2/);
+  assert.match(wiki, /下一步：ReadWiki\(kb="sample-uart", pages=\["uart\/[a-z-]+"\]\)/);
+  assert.match(searchWikiTool(m, { pattern: '0x0[48]\\b', limit: 2, offset: 2 }), /顯示第 3-/);
+
+  assert.match(searchWikiTool(m, { pattern: 'uart_init(', scope: 'raw' }), /^注意：這個樣式不是合法的 regex，已當成一般文字比對。\n[\s\S]*raw\/uart_drv\.c/);
+  const none = searchWikiTool(m, { pattern: 'zzz\\d{9}', kb: 'sample-uart' });
+  assert.match(none, /查無結果[\s\S]*scope="raw"[\s\S]*不指定 kb[\s\S]*改用 terms 關鍵字搜尋/);
+  assert.match(searchWikiTool(m, { pattern: 'x', terms: ['y'] }), /terms 與 pattern 只能給一個/);
+  assert.match(searchWikiTool(m, { pattern: '   ' }), /缺少 terms 或 pattern/);
+  assert.match(searchWikiTool(m, { pattern: 'a'.repeat(LIMITS.grepMaxPatternChars + 1) }), /pattern 太長/);
+  assert.match(searchWikiTool(m, { pattern: 'x', scope: 'all' }), /scope 只能是/);
 });
 
 test('SearchWiki：不指定 kb 時跨知識庫', () => {
@@ -333,6 +392,7 @@ test('端到端：MCP client 透過 stdio 走完 查索引 → 搜尋 → 讀頁
     assert.match(await call('GetWikiInfo', {}), /代號 sample-uart/);
     assert.match(await call('SearchWiki', { terms: ['115200'] }), /頁面 uart\/baud-rate/);
     assert.match(await call('SearchWiki', { terms: 'brr' }), /頁面 uart\/baud-rate-register/);
+    assert.match(await call('SearchWiki', { pattern: 'uart_set_\\w+', scope: 'raw' }), /raw\/uart_drv\.c（命中 \d+ 行/);
     const page = await call('ReadWiki', { kb: 'sample-uart', pages: ['uart/baud-rate'] });
     assert.match(page, /- raw\/uart_drv\.c:L31-L46/);
     assert.match(await call('FetchRaw', { kb: 'sample-uart', path: 'raw/uart_drv.c:L31-L46' }), /int uart_set_baud\(uint32_t baud\)/);

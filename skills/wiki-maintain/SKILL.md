@@ -132,4 +132,5 @@ description: 建立與維護 LLM Wiki 知識庫。使用者要求建立知識庫
 - `kb check`：只檢查格式，比 `kb lint` 快。
 - `kb validate wiki/<分類>/<名稱>.md`：只檢查一頁。
 - `kb search <關鍵字>`：確認頁面搜尋得到。
+- `kb search --grep "<樣式>" --scope raw`：用 regex 在來源檔裡找函式名、位址、錯誤碼出現在哪幾行。去掉 `--scope raw` 則是找頁面。
 - `kb rebuild`：重新產生 `index.md` 與搜尋索引。`kb check` 說索引過期時使用。

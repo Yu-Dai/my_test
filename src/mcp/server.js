@@ -26,11 +26,12 @@ const TOOLS = [
   {
     name: 'SearchWiki',
     fn: searchWikiTool,
-    description: '用關鍵字搜尋知識庫。多個關鍵字任一命中即算，不分大小寫，不支援 regex，不是語意搜尋。中文、英文、縮寫都放進 terms 命中率較高。回傳頁面代號、摘要、命中片段，再用 ReadWiki 讀全文。',
+    description: '搜尋知識庫，兩種方式擇一。（1）terms：關鍵字搜尋，多個關鍵字任一命中即算，不分大小寫，不是語意搜尋；中文、英文、縮寫都放進去命中率較高；回傳頁面代號、摘要、命中片段。（2）pattern：樣式比對（regex，像 grep），逐行比對並列出命中的行與行數，適合找函式名、暫存器位址、錯誤碼這類有固定格式的東西；找程式碼時加 scope="raw"。',
     inputSchema: {
-      terms: strOrList.describe('關鍵字陣列，例如 ["鮑率", "baud rate", "BRR"]'),
+      terms: strOrList.optional().describe('關鍵字陣列，例如 ["鮑率", "baud rate", "BRR"]。與 pattern 擇一'),
+      pattern: z.string().optional().describe('regex 樣式，逐行比對、不分大小寫，例如 "uart_\\w+_init" 或 "0x[0-9A-F]{4}"。與 terms 擇一'),
       kb: z.string().optional().describe('知識庫代號。省略則搜尋所有知識庫'),
-      scope: z.string().optional().describe('"wiki"（預設，搜尋整理過的頁面）或 "raw"（搜尋原始來源檔，頁面找不到時才用）'),
+      scope: z.string().optional().describe('"wiki"（預設，搜尋整理過的頁面）或 "raw"（搜尋原始來源檔：頁面找不到時，或用 pattern 找程式碼時）'),
       limit: intLike.describe('最多回傳幾筆，預設 10'),
       offset: intLike.describe('略過前幾筆，回傳內容說「還有 N 筆」時才需要'),
     },

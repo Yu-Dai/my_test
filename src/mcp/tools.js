@@ -4,15 +4,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, listFiles, listHeadings, parsePageId, parseSourceRef, readTextFile, resolveSourceRef,
-  searchRaw, searchWiki, splitLines,
+  IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, grepSearch, listFiles, listHeadings, parsePageId, parseSourceRef, pathToPageId, readFilesForGrep,
+  readTextFile, resolveSourceRef, searchRaw, searchWiki, splitLines,
 } from '../core/index.js';
 import { CONFIG_EXAMPLE } from './config.js';
 
 export const SERVER_INSTRUCTIONS = [
   '這是唯讀的 wiki 知識庫。回答問題前先查知識庫，典型流程：',
   '1. GetWikiInfo：看有哪些知識庫，以及知識庫的頁面目錄。',
-  '2. SearchWiki：用關鍵字搜尋（中文、英文、縮寫都試），或直接從目錄挑頁面。',
+  '2. SearchWiki：用關鍵字搜尋（terms，中文、英文、縮寫都試），或直接從目錄挑頁面。找函式名、暫存器位址、錯誤碼這類有固定格式的東西時，改用樣式比對（pattern）。',
   '3. ReadWiki：讀取頁面全文。頁面用「分類/名稱」這種代號指稱，例如 uart/baud-rate。',
   '4. 頁面內容不夠細時，用 FetchRaw 讀取頁面「來源」列出的原始檔段落。',
   '5. 頁面有圖片、而且需要看圖才能回答時，用 FetchImage 讀取頁面「本頁的圖片」列出的路徑。',
@@ -126,7 +126,11 @@ export function searchWikiTool(mounts, args = {}) {
   mounts.refresh();
   if (mounts.all().length === 0) return noMounts(mounts);
   const terms = asList(args.terms);
-  if (terms.length === 0) return '缺少 terms。請給一個或多個關鍵字，任一命中即算。\n正確寫法：SearchWiki(terms=["鮑率", "baud rate"])';
+  const pattern = args.pattern === undefined || args.pattern === null ? '' : String(args.pattern);
+  const usage = '關鍵字搜尋：SearchWiki(terms=["鮑率", "baud rate"])，任一命中即算。\n樣式比對（regex，逐行）：SearchWiki(pattern="uart_\\w+_init", scope="raw")';
+  if (terms.length === 0 && !pattern.trim()) return `缺少 terms 或 pattern，兩個擇一。\n${usage}`;
+  if (terms.length > 0 && pattern.trim()) return `terms 與 pattern 只能給一個，目前兩個都有。\n${usage}`;
+  if (pattern.length > LIMITS.grepMaxPatternChars) return `pattern 太長（${pattern.length} 字，上限 ${LIMITS.grepMaxPatternChars} 字）。\n下一步：改用較短的樣式，或改用 terms 關鍵字搜尋。`;
   const scope = args.scope ? String(args.scope).trim() : 'wiki';
   if (scope !== 'wiki' && scope !== 'raw') return `scope 只能是 "wiki"（搜尋整理過的頁面，預設）或 "raw"（搜尋原始來源檔），目前是 ${q(scope)}。`;
 
@@ -139,6 +143,7 @@ export function searchWikiTool(mounts, args = {}) {
   const limit = Math.min(Math.max(1, Number(args.limit) || LIMITS.searchDefaultLimit), LIMITS.searchMaxLimit);
   const offset = Math.max(0, Number(args.offset) || 0);
   const where = args.kb ? `知識庫 ${kbs[0].name}` : `全部 ${kbs.length} 個知識庫`;
+  if (pattern.trim()) return grepReport(kbs, pattern, { scope, where, limit, offset, narrowed: Boolean(args.kb) });
   const label = `搜尋「${terms.join('、')}」（${where}，${scope === 'raw' ? '原始來源檔' : '頁面'}）`;
 
   const found = scope === 'wiki'
@@ -148,7 +153,8 @@ export function searchWikiTool(mounts, args = {}) {
 
   if (shown.length === 0) {
     const out = [`${label}：${found.total === 0 ? '查無結果' : `共 ${found.total} 筆，offset=${offset} 已超過範圍`}。`, '', '下一步（擇一）：'];
-    out.push('- 換關鍵字再搜尋：同義詞、英文、縮寫、較短的詞。這裡是關鍵字比對，不是語意搜尋，也不支援 regex。');
+    out.push('- 換關鍵字再搜尋：同義詞、英文、縮寫、較短的詞。這裡是關鍵字比對，不是語意搜尋。');
+    out.push('- 要找有固定格式的東西（函式名、位址、錯誤碼），改用樣式比對：SearchWiki(pattern="regex 樣式")。');
     if (scope === 'wiki') out.push('- 加上 scope="raw" 搜尋原始來源檔。');
     if (args.kb) out.push('- 不指定 kb，搜尋全部知識庫。');
     out.push(`- 用 GetWikiInfo(kb=${q(kbs[0].name)}) 看頁面目錄，直接挑頁面。`);
@@ -174,6 +180,45 @@ export function searchWikiTool(mounts, args = {}) {
     const at = first.hits[0]?.line ?? 1;
     out.push(`下一步：FetchRaw(kb=${q(first.kb)}, path=${q(first.path)}, start_line=${Math.max(1, at - 10)}, end_line=${at + 30}) 讀取命中位置前後的內容。`);
   }
+  return out.join('\n');
+}
+
+/** SearchWiki 的樣式比對：逐行比對頁面檔或原始來源檔，列出命中的行。 */
+function grepReport(kbs, pattern, { scope, where, limit, offset, narrowed }) {
+  const sources = kbs.map((k) => ({ kb: k.name, files: readFilesForGrep(k.root, scope === 'raw' ? k.rawFiles : k.pageList.map((p) => `wiki/${p.id}.md`)) }));
+  const found = grepSearch(sources, pattern);
+  const label = `用樣式 ${q(pattern)} 比對（${where}，${scope === 'raw' ? '原始來源檔' : '頁面'}）`;
+  if (!found.ok) {
+    const why = found.reason === 'timeout' ? `${found.message}，已中止。這個樣式太複雜（常見原因：巢狀的重複，例如 (a+)+ 或 (.*)*）` : `無法執行（${found.message}）`;
+    return `${label}：${why}。\n下一步：改用較簡單的樣式，或改用 terms 關鍵字搜尋。`;
+  }
+  const note = found.literal ? '注意：這個樣式不是合法的 regex，已當成一般文字比對。\n' : '';
+  const shown = found.results.slice(offset, offset + limit);
+  if (shown.length === 0) {
+    const out = [`${note}${label}：${found.total === 0 ? '查無結果' : `共 ${found.total} 筆，offset=${offset} 已超過範圍`}。`, '', '下一步（擇一）：'];
+    out.push('- 放寬樣式再試。比對不分大小寫，一次比對一行，不能跨行。');
+    out.push(scope === 'wiki' ? '- 加上 scope="raw" 比對原始來源檔（程式碼、規格原文）。' : '- 去掉 scope，比對整理過的頁面。');
+    if (narrowed) out.push('- 不指定 kb，比對全部知識庫。');
+    out.push('- 改用 terms 關鍵字搜尋：SearchWiki(terms=["關鍵字"])。');
+    return out.join('\n');
+  }
+  const lines = found.results.reduce((n, r) => n + r.hitCount, 0);
+  const unit = scope === 'raw' ? '個檔案' : '個頁面';
+  const out = [`${note}${label}：共 ${found.total} ${unit}、${lines} 行命中，顯示第 ${offset + 1}-${offset + shown.length} ${unit.slice(0, 1)}。`, ''];
+  const byName = new Map(kbs.map((k) => [k.name, k]));
+  shown.forEach((r, i) => {
+    const id = scope === 'raw' ? null : pathToPageId(r.path);
+    const what = id ? `頁面 ${id}｜${byName.get(r.kb).pages.get(id)?.title ?? ''}` : r.path;
+    out.push(`${offset + i + 1}. 知識庫 ${r.kb}｜${what}（命中 ${r.hitCount} 行${r.hitCount > r.hits.length ? `，顯示前 ${r.hits.length} 行` : ''}）`);
+    for (const h of r.hits) out.push(`   L${h.line}: ${h.text}`);
+  });
+  out.push('');
+  if (found.total > offset + shown.length) out.push(`還有 ${found.total - offset - shown.length} ${unit}：再呼叫一次並加上 offset=${offset + shown.length}，或改用更精確的樣式。`);
+  const first = shown[0];
+  if (scope === 'raw') {
+    const at = first.hits[0].line;
+    out.push(`下一步：FetchRaw(kb=${q(first.kb)}, path=${q(first.path)}, start_line=${Math.max(1, at - 10)}, end_line=${at + 30}) 讀取命中位置前後的內容。`);
+  } else out.push(`下一步：ReadWiki(kb=${q(first.kb)}, pages=[${q(pathToPageId(first.path))}]) 讀取頁面全文。`);
   return out.join('\n');
 }
 
