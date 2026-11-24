@@ -8,7 +8,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { LIMITS } from '../src/core/index.js';
 import { loadConfig } from '../src/mcp/config.js';
 import { Mounts } from '../src/mcp/mounts.js';
-import { fetchRaw, getWikiInfo, normalizePageRef, readWiki, searchWikiTool } from '../src/mcp/tools.js';
+import { fetchImage, fetchRaw, getWikiInfo, normalizePageRef, readWiki, searchWikiTool } from '../src/mcp/tools.js';
 import { KB_JSON, REPO_ROOT, SAMPLE_KB, makeKb, makePage } from './helpers.js';
 
 const SERVER = path.join(REPO_ROOT, 'src', 'mcp', 'server.js');
@@ -281,6 +281,36 @@ test('FetchRaw：錯誤情況都給下一步，且不能讀 raw/ 以外的檔案
   }
 });
 
+test('FetchImage：路徑寫法、找不到、超過上限、SVG', () => {
+  const big = Buffer.alloc(LIMITS.imageMaxBytes + 1);
+  const root = makeKb({ 'assets/diagram.svg': '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>', 'assets/sub/big.png': big, 'assets/notes.txt': 'x' });
+  const m = new Mounts([{ path: root }, { path: SAMPLE_KB }]);
+  const png = 'assets/uart-spec-001.png';
+  // 幾種寫法都指到同一張圖
+  for (const args of [{ path: `kb://sample-uart/${png}` }, { kb: 'sample-uart', path: png }, { kb: 'sample-uart', path: 'uart-spec-001.png' }, { kb: 'sample-uart', path: `/${png.split('/').join('\\')}` }]) {
+    const r = fetchImage(m, args);
+    assert.equal(r.image.mimeType, 'image/png', JSON.stringify(args));
+    assert.match(r.text, /知識庫 sample-uart｜assets\/uart-spec-001\.png[\s\S]*看不到圖片/);
+  }
+  assert.match(fetchImage(m, { path: png }), /需要指定 kb/);
+  assert.match(fetchImage(m, { path: 'kb://nope/assets/x.png' }), /沒有「nope」這個知識庫/);
+  assert.match(fetchImage(m, { kb: 'sample-uart' }), /缺少 path[\s\S]*FetchImage\(kb="sample-uart", path="assets\/uart-spec-001\.png"\)/);
+  assert.match(fetchImage(m, { kb: 'sample-uart', path: 'assets/nope.png' }), /沒有圖片「assets\/nope\.png」。可用的圖片：assets\/uart-spec-001\.png/);
+  // 只能讀 assets/ 裡的圖片：跳出資料夾、讀其他檔案都擋下
+  for (const bad of ['../kb.json', 'assets/../kb.json', 'raw/spec.md', 'assets/notes.txt', 'kb://test-kb/kb.json']) {
+    assert.match(fetchImage(m, { kb: 'test-kb', path: bad }), /沒有圖片/, bad);
+  }
+  assert.match(fetchImage(m, { kb: 'test-kb', path: 'assets/sub/big.png' }), /超過可回傳的上限 1024 KB[\s\S]*依上面的說明文字回答/);
+  assert.match(fetchImage(m, { kb: 'test-kb', path: 'assets/diagram.svg' }), /SVG 向量圖[\s\S]*<svg xmlns/);
+  assert.match(fetchImage(new Mounts([]), { path: png }), /目前沒有掛載任何知識庫/);
+});
+
+test('ReadWiki：有圖片的頁面列出圖片路徑，沒有的不列', () => {
+  const m = new Mounts([{ path: SAMPLE_KB }]);
+  assert.match(readWiki(m, { pages: ['uart/frame-format'] }), /--- 本頁的圖片（需要看圖時用 FetchImage 讀取[^\n]*\n- kb:\/\/sample-uart\/assets\/uart-spec-001\.png｜UART 訊框時序圖/);
+  assert.doesNotMatch(readWiki(m, { pages: ['uart/baud-rate'] }), /本頁的圖片/);
+});
+
 // ------------------------------------------------------------------ stdio 端到端
 
 test('端到端：MCP client 透過 stdio 走完 查索引 → 搜尋 → 讀頁 → 讀 raw', async () => {
@@ -290,7 +320,7 @@ test('端到端：MCP client 透過 stdio 走完 查索引 → 搜尋 → 讀頁
   try {
     assert.match(client.getInstructions(), /GetWikiInfo/);
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['FetchRaw', 'GetWikiInfo', 'ReadWiki', 'SearchWiki']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['FetchImage', 'FetchRaw', 'GetWikiInfo', 'ReadWiki', 'SearchWiki']);
     for (const t of tools) {
       assert.equal(t.annotations.readOnlyHint, true);
       assert.ok(t.description.length > 20);
@@ -307,6 +337,16 @@ test('端到端：MCP client 透過 stdio 走完 查索引 → 搜尋 → 讀頁
     assert.match(page, /- raw\/uart_drv\.c:L31-L46/);
     assert.match(await call('FetchRaw', { kb: 'sample-uart', path: 'raw/uart_drv.c:L31-L46' }), /int uart_set_baud\(uint32_t baud\)/);
     assert.match(await call('FetchRaw', { path: 'raw/uart_drv.c', start_line: '31', end_line: 32 }), /第 31-32 行/);
+    // 讀頁 → 從「本頁的圖片」拿路徑 → 讀圖，圖片以 image 內容回傳
+    const withImage = await call('ReadWiki', { pages: ['uart/frame-format'] });
+    const imagePath = withImage.match(/本頁的圖片[^\n]*\n- (kb:\/\/\S+?)｜/)[1];
+    assert.equal(imagePath, 'kb://sample-uart/assets/uart-spec-001.png');
+    const img = await client.callTool({ name: 'FetchImage', arguments: { path: imagePath } });
+    assert.notEqual(img.isError, true);
+    assert.deepEqual(img.content.map((c) => c.type), ['text', 'image']);
+    assert.match(img.content[0].text, /頁面對這張圖的說明：UART 訊框時序圖/);
+    assert.equal(img.content[1].mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(img.content[1].data, 'base64'), fs.readFileSync(path.join(SAMPLE_KB, 'assets', 'uart-spec-001.png')));
   } finally {
     await client.close();
   }

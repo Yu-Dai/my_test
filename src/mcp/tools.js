@@ -1,9 +1,10 @@
-// 四個唯讀檢索工具。每個函式吃 (mounts, args)，回傳給模型看的文字。
+// 五個唯讀檢索工具。每個函式吃 (mounts, args)，回傳給模型看的文字；FetchImage 讀到圖片時另外附上圖片內容。
 // 回傳內容本身就是引導：查無結果、參數錯誤、輸出被截斷時，都說明下一步。
 
+import fs from 'node:fs';
 import path from 'node:path';
 import {
-  LIMITS, MARKDOWN_EXTENSIONS, listHeadings, parsePageId, parseSourceRef, readTextFile, resolveSourceRef,
+  IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, listFiles, listHeadings, parsePageId, parseSourceRef, readTextFile, resolveSourceRef,
   searchRaw, searchWiki, splitLines,
 } from '../core/index.js';
 import { CONFIG_EXAMPLE } from './config.js';
@@ -14,6 +15,7 @@ export const SERVER_INSTRUCTIONS = [
   '2. SearchWiki：用關鍵字搜尋（中文、英文、縮寫都試），或直接從目錄挑頁面。',
   '3. ReadWiki：讀取頁面全文。頁面用「分類/名稱」這種代號指稱，例如 uart/baud-rate。',
   '4. 頁面內容不夠細時，用 FetchRaw 讀取頁面「來源」列出的原始檔段落。',
+  '5. 頁面有圖片、而且需要看圖才能回答時，用 FetchImage 讀取頁面「本頁的圖片」列出的路徑。',
   '回答時註明依據的頁面代號。知識庫沒有的內容要明說查不到，不要自行編造。',
 ].join('\n');
 
@@ -198,8 +200,11 @@ function suggestPages(kb, id) {
   return [...new Set([...hits, ...sameCat])].slice(0, 8);
 }
 
+const IMAGE_URL_SCHEME = 'kb://';
+const imageUrl = (kb, rel) => `${IMAGE_URL_SCHEME}${kb.name}/${rel}`;
+
 function renderPage(mounts, kb, page) {
-  const body = page.body.replace(/(!\[[^\]\n]*\]\()assets\//g, `$1kb://${kb.name}/assets/`);
+  const body = page.body.replace(/(!\[[^\]\n]*\]\()assets\//g, `$1${imageUrl(kb, 'assets/')}`);
   const out = [`===== 知識庫 ${kb.name}｜頁面 ${page.id} =====`, `標題：${page.title}`, `類型：${page.type}｜更新：${page.updated ?? '未知'}`, `摘要：${page.summary}`, '', body, ''];
   const seen = new Set();
   const linkLines = [];
@@ -215,6 +220,8 @@ function renderPage(mounts, kb, page) {
   }
   if (linkLines.length) out.push('--- 本頁連到的頁面（可用 ReadWiki 讀取）---', ...linkLines, '');
   if (page.sources.length) out.push('--- 本頁的來源（可用 FetchRaw 讀取，path 直接填下面的寫法）---', ...page.sources.map((s) => `- ${s.ref}`), '');
+  const images = [...new Map(page.images.map((i) => [i.path, i])).values()];
+  if (images.length) out.push('--- 本頁的圖片（需要看圖時用 FetchImage 讀取，path 直接填下面的寫法）---', ...images.map((i) => `- ${imageUrl(kb, i.path)}｜${i.alt}`), '');
   return out.join('\n');
 }
 
@@ -344,4 +351,60 @@ export function fetchRaw(mounts, args = {}) {
   const out = [`知識庫 ${kb.name}｜${filePath} 第 ${start}-${cut} 行${heading ? `（章節：${heading}）` : ''}｜全檔共 ${total} 行`, '', ...numbered(all.slice(start - 1, cut), start), ''];
   if (cut < end) out.push(`已達輸出上限，第 ${cut + 1}-${end} 行尚未回傳。繼續讀取：FetchRaw(kb=${q(kb.name)}, path=${q(filePath)}, start_line=${cut + 1}, end_line=${end})`);
   return out.join('\n').trimEnd();
+}
+
+// ----------------------------------------------------------------- FetchImage
+
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const SVG_EXTENSION = '.svg';
+
+/**
+ * 讀取知識庫 assets/ 裡的一張圖片。
+ * @returns {string | { text: string, image: { data: string, mimeType: string } }} 讀不到時只回說明文字；SVG 是文字格式，以原始碼回傳
+ */
+export function fetchImage(mounts, args = {}) {
+  mounts.refresh();
+  if (mounts.all().length === 0) return noMounts(mounts);
+  const raw = args.path === undefined || args.path === null ? '' : String(args.path).trim();
+  // path 可以直接是頁面裡的寫法 kb://知識庫代號/assets/檔名，這時知識庫代號從路徑取得
+  let rel = raw.split('\\').join('/');
+  let kbName = args.kb;
+  if (rel.startsWith(IMAGE_URL_SCHEME)) {
+    const rest = rel.slice(IMAGE_URL_SCHEME.length);
+    const cut = rest.indexOf('/');
+    kbName = (kbName === undefined || kbName === null || kbName === '') && cut > 0 ? rest.slice(0, cut) : kbName;
+    rel = cut > 0 ? rest.slice(cut + 1) : '';
+  }
+  rel = rel.replace(/^\.?\/+/, '');
+  const { kb, error } = pickKb(mounts, kbName);
+  if (error) return error;
+
+  const available = listFiles(kb.root, 'assets').filter((f) => IMAGE_EXTENSIONS.includes(path.extname(f).toLowerCase()));
+  const example = `FetchImage(kb=${q(kb.name)}, path=${q(available[0] ?? 'assets/uart-frame.png')})`;
+  if (!rel) return `缺少 path。\n正確寫法：${example}\n圖片路徑從 ReadWiki 回傳的「本頁的圖片」取得。`;
+  if (!rel.startsWith('assets/')) rel = `assets/${rel}`;
+  if (!available.includes(rel)) {
+    const base = path.posix.basename(rel).toLowerCase();
+    const near = available.filter((f) => f.toLowerCase().includes(base) || base.includes(path.posix.basename(f).toLowerCase()));
+    const list = (near.length ? near : available).slice(0, 30);
+    return `知識庫 ${kb.name} 沒有圖片「${rel}」。${near.length ? '相近的圖片' : '可用的圖片'}：${list.join('、') || '（這個知識庫沒有圖片）'}\n下一步：改用上面的路徑再呼叫一次。FetchImage 只能讀 assets/ 底下的圖片，路徑從 ReadWiki 回傳的「本頁的圖片」取得。`;
+  }
+
+  const abs = path.join(kb.root, ...rel.split('/'));
+  const captions = [...new Set(kb.pageList.flatMap((p) => p.images.filter((i) => i.path === rel).map((i) => i.alt)))];
+  const head = [`知識庫 ${kb.name}｜${rel}`, ...(captions.length ? [`頁面對這張圖的說明：${captions.join('／')}`] : [])];
+  const size = fs.statSync(abs).size;
+  if (size > LIMITS.imageMaxBytes) {
+    return [...head, '', `這張圖片有 ${Math.ceil(size / 1024)} KB，超過可回傳的上限 ${LIMITS.imageMaxBytes / 1024} KB，無法讀取。`, '下一步：依上面的說明文字回答，並告訴使用者圖片的路徑。'].join('\n');
+  }
+  const ext = path.extname(rel).toLowerCase();
+  if (ext === SVG_EXTENSION) {
+    const svg = fs.readFileSync(abs, 'utf8');
+    const cut = svg.length > LIMITS.rawMaxChars;
+    return [...head, '', '這是 SVG 向量圖，以下是它的原始碼：', cut ? svg.slice(0, LIMITS.rawMaxChars) : svg, ...(cut ? ['（原始碼超過輸出上限，後面被截斷）'] : [])].join('\n');
+  }
+  return {
+    text: [...head, '', '圖片內容附在這則回覆裡。如果你看不到圖片，代表目前的環境不支援圖片：依上面的說明文字回答，並告訴使用者圖片的路徑。'].join('\n'),
+    image: { data: fs.readFileSync(abs).toString('base64'), mimeType: IMAGE_MIME[ext] },
+  };
 }

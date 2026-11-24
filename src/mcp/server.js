@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// wiki MCP server：本機 stdio，唯讀，四個工具。stdout 留給協定，訊息一律寫 stderr。
+// wiki MCP server：本機 stdio，唯讀，五個工具。stdout 留給協定，訊息一律寫 stderr。
 
 import process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { Mounts } from './mounts.js';
-import { SERVER_INSTRUCTIONS, fetchRaw, getWikiInfo, readWiki, searchWikiTool } from './tools.js';
+import { SERVER_INSTRUCTIONS, fetchImage, fetchRaw, getWikiInfo, readWiki, searchWikiTool } from './tools.js';
 
 const strOrList = z.union([z.array(z.string()), z.string()]);
 const intLike = z.union([z.number(), z.string()]).optional();
@@ -56,6 +56,15 @@ const TOOLS = [
       end_line: intLike.describe('結束行數'),
     },
   },
+  {
+    name: 'FetchImage',
+    fn: fetchImage,
+    description: '讀取頁面裡的一張圖片。頁面的文字說明不夠、需要看圖（時序圖、電路圖、表格截圖）才能回答時使用。path 直接填 ReadWiki 回傳的「本頁的圖片」列出的寫法（kb://知識庫代號/assets/檔名）即可。一次讀一張。',
+    inputSchema: {
+      kb: z.string().optional().describe('知識庫代號。path 是 kb:// 開頭，或只掛載一個知識庫時可省略'),
+      path: z.string().describe('圖片路徑：kb://uart-driver/assets/uart-frame.png 或 assets/uart-frame.png'),
+    },
+  },
 ];
 
 const config = loadConfig(process.argv.slice(2));
@@ -74,7 +83,9 @@ for (const tool of TOOLS) {
     { description: tool.description, inputSchema: tool.inputSchema, annotations: { readOnlyHint: true, openWorldHint: false } },
     async (args) => {
       try {
-        return { content: [{ type: 'text', text: tool.fn(mounts, args) }] };
+        const out = tool.fn(mounts, args);
+        if (typeof out === 'string') return { content: [{ type: 'text', text: out }] };
+        return { content: [{ type: 'text', text: out.text }, { type: 'image', data: out.image.data, mimeType: out.image.mimeType }] };
       } catch (e) {
         console.error(`[wiki-mcp] ${tool.name} 失敗：${e.stack ?? e}`);
         return { content: [{ type: 'text', text: `${tool.name} 執行時發生內部錯誤：${e.message}\n下一步：換一種參數再試；持續發生時請回報給知識庫維護者。` }], isError: true };

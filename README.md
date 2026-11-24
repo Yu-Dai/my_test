@@ -10,7 +10,8 @@
 | 元件 | 狀態 |
 | --- | --- |
 | 核心函式庫與 `kb` CLI（驗證、索引、搜尋） | 可用 |
-| wiki MCP server（唯讀，四個工具，本機路徑掛載） | 可用 |
+| wiki MCP server（唯讀，五個工具，本機路徑掛載） | 可用 |
+| MCP 圖片取用（`FetchImage`） | 已實作，尚未實測 agent 平台是否把圖片交給模型 |
 | 維護 skill：init、ingest、commit、lint、query test、undo、rebuild | 可用 |
 | 維護 skill：update（依來源 diff 更新） | 尚未實作 |
 | 共享知識庫（bare repo 遠端、本機快取、掛載檢查） | 可用，尚未在網路共享資料夾上實測 |
@@ -115,8 +116,9 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
 | `SearchWiki` | `terms`、`kb`、`scope`、`limit`、`offset` | 關鍵字搜尋，任一命中即算。`scope` 為 `wiki`（預設）或 `raw` |
 | `ReadWiki` | `kb`、`pages` | 讀取頁面全文，附該頁連到的頁面與來源清單 |
 | `FetchRaw` | `kb`、`path`、`section`、`start_line`、`end_line` | 讀取原始來源檔的指定章節或行數範圍 |
+| `FetchImage` | `kb`、`path` | 讀取頁面裡的一張圖片，以 MCP 的圖片內容回傳 |
 
-典型流程：`GetWikiInfo` → `SearchWiki` 或從目錄挑頁 → `ReadWiki` → 內容不足時 `FetchRaw`。
+典型流程：`GetWikiInfo` → `SearchWiki` 或從目錄挑頁 → `ReadWiki` → 內容不足時 `FetchRaw`，需要看圖時 `FetchImage`。
 
 - 每個工具都有輸出上限，超過時截斷並說明如何取得後續。
 - 查無結果或參數錯誤時，回傳會給下一步建議。
@@ -124,7 +126,9 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
 - 共享知識庫在 server 啟動時更新快取。更新在背景進行，啟動後馬上可以用既有的快取檢索。
   更新失敗（例如離線）時沿用快取，`GetWikiInfo` 會註明快取日期與失敗原因。
 - 掛載時檢查：知識庫代號是否重複、`schema_version` 是否支援、機密等級是否允許。沒通過的知識庫不掛載，原因列在 `GetWikiInfo`。
-- 頁面中的圖片路徑會轉成 `kb://知識庫代號/assets/檔名`。圖片取用工具尚未實作。
+- 頁面中的圖片路徑會轉成 `kb://知識庫代號/assets/檔名`，`ReadWiki` 會在頁面後面列出「本頁的圖片」，把路徑交給 `FetchImage` 就能讀圖。
+  模型能不能真的看到圖，取決於 agent 平台是否把 MCP 回傳的圖片交給模型、以及模型是否支援圖片；看不到時回傳的文字會請模型改依說明文字回答。
+  單張上限 1 MB；SVG 以原始碼文字回傳。
 
 ## 建立與維護知識庫
 
