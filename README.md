@@ -3,8 +3,6 @@
 以 Karpathy「LLM Wiki」理念為基礎的知識庫：LLM 把原始來源整理成 markdown wiki，AI agent 透過 MCP 檢索。
 不需要 embedding model，檢索靠關鍵字與索引；設計上假設模型能力偏弱。
 
-完整設計見 [LLM Wiki 知識庫系統：實作規格.md](LLM%20Wiki%20知識庫系統：實作規格.md)。
-
 ## 目前進度
 
 | 元件 | 狀態 |
