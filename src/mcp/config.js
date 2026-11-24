@@ -1,6 +1,7 @@
 // 掛載設定：放在使用者端，列出要用的知識庫。公司專屬路徑（共享資料夾位置）只出現在這裡，不進 repo。
 //
 // 設定檔位置（依序）：--config <路徑>、環境變數 LLM_WIKI_CONFIG、~/.llm-wiki/config.json
+// 設定檔由 kb mount／kb config 指令建立與修改（src/core/mount.js），這裡只讀。
 // 另外可用 --kb <路徑>（可重複）直接指定本機知識庫，不需設定檔。
 //
 // {
@@ -13,19 +14,16 @@
 // }
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY } from '../core/index.js';
+import { fileURLToPath } from 'node:url';
+import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY, defaultCacheDir, defaultConfigPath } from '../core/index.js';
+
+export { defaultCacheDir, defaultConfigPath };
+
+// 只用 MCP 的使用者不一定把 kb 加進 PATH，所以引導訊息給完整的執行方式
+const KB_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'kb.js');
 
 export const CONFIG_EXAMPLE = JSON.stringify({ max_confidentiality: 'internal', knowledge_bases: [{ path: 'D:/kb/my-notes' }, { remote: '//server/share/kb/uart-driver.git' }] }, null, 2);
-
-export function defaultConfigPath() {
-  return path.join(os.homedir(), '.llm-wiki', 'config.json');
-}
-
-export function defaultCacheDir(env = process.env) {
-  return env.LLM_WIKI_CACHE ?? path.join(os.homedir(), '.llm-wiki', 'cache');
-}
 
 /**
  * @param {string[]} argv
@@ -53,7 +51,8 @@ export function loadConfig(argv, env = process.env) {
   });
 
   if (!fs.existsSync(configPath)) {
-    if (required) problems.push(`找不到設定檔 ${configPath}。請建立這個檔案，內容範例：\n${CONFIG_EXAMPLE}`);
+    if (explicit ?? env.LLM_WIKI_CONFIG) problems.push(`找不到設定檔 ${configPath}。請使用者確認 --config 或環境變數 LLM_WIKI_CONFIG 指定的路徑是否正確`);
+    else if (required) problems.push(`找不到設定檔 ${configPath}。請使用者在終端機執行以下指令加入知識庫，然後重新啟動 MCP：\n  node "${KB_CLI}" mount add <知識庫資料夾，或共享資料夾上的 .git 路徑>`);
     return result(required ? configPath : null);
   }
   let cfg;

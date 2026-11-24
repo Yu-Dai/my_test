@@ -100,7 +100,7 @@ test('share：建立共享儲存庫並推送，說明使用者要怎麼設定', 
   const r = shareKb(a, remote);
   assert.equal(r.code, 0, r.text);
   assert.match(r.text, /已共享到：/);
-  assert.match(r.text, /knowledge_bases 加上：\{ "remote": ".*share\/shared-kb\.git" \}/);
+  assert.match(r.text, /kb mount add ".*share\/shared-kb\.git"/);
   assert.match(r.text, /kb clone /);
   assert.ok(fs.existsSync(path.join(remote, 'HEAD')));
   assert.equal(git(remote, ['rev-parse', 'main']).stdout.trim(), head(a));

@@ -17,3 +17,5 @@ export * from './querytest.js';
 export * from './lint.js';
 export * from './undo.js';
 export * from './remote.js';
+export * from './userconfig.js';
+export * from './mount.js';

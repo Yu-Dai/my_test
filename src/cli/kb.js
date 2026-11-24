@@ -10,6 +10,7 @@ import {
   initKb, ingestAbort, ingestCommit, ingestPart, ingestStart, ingestStatus,
   cloneKb, pullKb, pushKb, shareKb,
   changes, editCommit, git, isRepoRoot, lintKb, queryTestAdd, queryTestRemove, queryTestRun, undoLast,
+  configGet, configPath, configSet, configUnset, mountAdd, mountDisable, mountEnable, mountList, mountRemove,
 } from '../core/index.js';
 
 const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
@@ -37,6 +38,18 @@ const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
   pull                  取得共享位置上別人推送的變更
   clone <共享路徑> <資料夾>  從共享位置取得工作複本（其他維護者用）
 
+使用端指令（設定 wiki MCP 要掛載哪些知識庫，不需要在知識庫資料夾內執行）：
+  mount list            列出設定檔裡的知識庫與檢查結果
+  mount add <路徑>      加入知識庫：本機的知識庫資料夾，或共享資料夾上的 <代號>.git
+  mount remove <代號或路徑>   從設定檔移除（不會刪除知識庫的檔案）
+  mount disable <代號或路徑>  暫時不掛載，設定保留
+  mount enable <代號或路徑>   重新啟用
+  config get [項目]     顯示設定：max_confidentiality、cache_dir
+  config set <項目> <值>      修改設定；調高 max_confidentiality 要加 --yes
+  config unset <項目>   回到預設值
+  config path           顯示設定檔位置
+                        設定檔不存在時自動建立；可用 --config <路徑> 指定其他設定檔
+
 查詢與檢查指令：
   check                 只檢查格式（格式、連結、來源引用、索引是否過期）
   validate <頁面檔>     檢查單一頁面；加 --draft 表示尚未由腳本填 updated
@@ -52,6 +65,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--draft') opts.draft = true;
+    else if (a === '--yes') opts.yes = true;
     else if (a === '--help' || a === '-h') opts.help = true;
     else if (a.startsWith('--')) opts[a.slice(2)] = argv[++i];
     else opts._.push(a);
@@ -104,6 +118,23 @@ const commands = {
 
   clone(opts) {
     return done(cloneKb(opts._[0], opts._[1]));
+  },
+
+  mount(opts) {
+    const sub = opts._.shift();
+    const subs = { list: mountList, add: mountAdd, remove: mountRemove, enable: mountEnable, disable: mountDisable };
+    if (!subs[sub]) fail(`mount 後面要接 list、add、remove、enable、disable 其中之一${sub ? `，目前是「${sub}」` : ''}`, '看目前掛載了哪些知識庫：kb mount list');
+    return done(subs[sub]({ config: opts.config }, opts._[0]));
+  },
+
+  config(opts) {
+    const sub = opts._.shift();
+    const where = { config: opts.config };
+    if (sub === 'path') return done(configPath(where));
+    if (sub === 'get') return done(configGet(where, opts._[0]));
+    if (sub === 'set') return done(configSet(where, opts._[0], opts._[1], { yes: opts.yes }));
+    if (sub === 'unset') return done(configUnset(where, opts._[0], { yes: opts.yes }));
+    fail(`config 後面要接 get、set、unset、path 其中之一${sub ? `，目前是「${sub}」` : ''}`, '看目前的設定：kb config get');
   },
 
   commit(opts) {

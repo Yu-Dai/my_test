@@ -27,32 +27,42 @@ npm test
 
 ## 設定 wiki MCP
 
-### 1. 建立掛載設定檔
+### 1. 加入要使用的知識庫
 
-設定檔列出要使用的知識庫資料夾。預設位置是使用者家目錄下的 `.llm-wiki/config.json`
-（Windows 為 `C:\Users\<帳號>\.llm-wiki\config.json`）。內容參考 [config.example.json](config.example.json)：
+用指令設定，不需要手動編輯設定檔。`<repo>` 是這個專案的絕對路徑；執行過 `npm link` 的話，`node <repo>/src/cli/kb.js` 可以簡寫成 `kb`。
 
-```json
-{
-  "max_confidentiality": "internal",
-  "knowledge_bases": [
-    { "path": "D:/kb/my-notes" },
-    { "remote": "//fileserver/share/kb/uart-driver.git" }
-  ]
-}
+```
+node <repo>/src/cli/kb.js mount add D:/kb/my-notes                          本機的知識庫資料夾
+node <repo>/src/cli/kb.js mount add //fileserver/share/kb/uart-driver.git   共享知識庫
+node <repo>/src/cli/kb.js mount list                                        確認結果
 ```
 
-- `path`：本機的知識庫資料夾（裡面有 `kb.json`），用於個人知識庫。相對路徑以設定檔所在的資料夾為準。
-- `remote`：共享知識庫，也就是共享資料夾上的儲存庫（維護者執行 `kb share` 時會顯示這個路徑）。
-  MCP 會把它複製到本機快取再讀取，不直接讀網路資料夾。
-- `max_confidentiality`：可掛載的最高機密等級，`public`、`internal`、`confidential` 由低到高，省略時為 `internal`。
-  知識庫的 `kb.json` 等級比它高就不會掛載。
-- `cache_dir`：共享知識庫的本機快取位置，省略時為 `~/.llm-wiki/cache`（也可用環境變數 `LLM_WIKI_CACHE`）。
-- Windows 路徑請用 `/`，或把 `\` 寫成 `\\`。
-- 設定檔位置可用 `--config <路徑>` 或環境變數 `LLM_WIKI_CONFIG` 指定。
-- 也可以不用設定檔，直接用 `--kb <路徑>` 指定知識庫，可重複多次。
+第一次執行時會自動建立設定檔 `~/.llm-wiki/config.json`（Windows 為 `C:\Users\<帳號>\.llm-wiki\config.json`）。
+想先試用，可以加入 repo 內附的範例知識庫 `examples/sample-kb`。
 
-想先試用，可以掛載 repo 內附的範例知識庫 `examples/sample-kb`。
+```
+kb mount list                  列出設定檔裡的知識庫與檢查結果
+kb mount add <路徑>            加入知識庫
+kb mount remove <代號或路徑>   從設定檔移除，不會刪除知識庫的檔案
+kb mount disable <代號或路徑>  暫時不掛載，設定保留
+kb mount enable <代號或路徑>   重新啟用
+kb config get [項目]           顯示設定
+kb config set <項目> <值>      修改設定
+kb config unset <項目>         回到預設值
+kb config path                 顯示設定檔位置
+```
+
+- 本機知識庫是裡面有 `kb.json` 的資料夾，用於個人知識庫。
+- 共享知識庫是共享資料夾上的儲存庫（維護者執行 `kb share` 時會顯示要執行的 `kb mount add` 指令）。
+  MCP 會把它複製到本機快取再讀取，不直接讀網路資料夾。
+- `kb mount add` 會當場檢查：路徑是不是知識庫、`kb.json` 是否合格、代號是否與已加入的重複、機密等級是否允許。沒通過就不加入。
+- 設定項目 `max_confidentiality`：可掛載的最高機密等級，`public`、`internal`、`confidential` 由低到高，預設 `internal`。
+  知識庫的 `kb.json` 等級比它高就不會掛載。調高時要加 `--yes`，由使用者本人確認這個環境可以使用該等級的資料。
+- 設定項目 `cache_dir`：共享知識庫的本機快取位置，預設 `~/.llm-wiki/cache`（也可用環境變數 `LLM_WIKI_CACHE`）。
+- **修改設定後要重新啟動 MCP 才生效。**
+- 要用另一份設定檔時，加上 `--config <路徑>` 或設定環境變數 `LLM_WIKI_CONFIG`。指定位置的設定檔不會自動建立。
+- 設定檔的格式見 [config.example.json](config.example.json)。停用的知識庫存在 `disabled_knowledge_bases`。
+- 也可以不用設定檔，註冊 MCP 時直接用 `--kb <路徑>` 指定知識庫，可重複多次。
 
 ### 2. 在 AI agent 註冊 MCP server
 
@@ -184,7 +194,7 @@ kb rebuild             重新產生 index.md 與搜尋索引
 維護者在本機的工作複本作業，完成後推上去；使用者的 MCP 從那裡更新本機快取。
 
 ```
-kb share <共享資料夾>/<代號>.git     第一次共享：建立儲存庫並推送，輸出使用者要加進設定檔的內容
+kb share <共享資料夾>/<代號>.git     第一次共享：建立儲存庫並推送，輸出使用者要執行的 kb mount add 指令
 kb push                             把本機的變更推到共享位置
 kb pull                             取得別人推送的變更
 kb clone <共享路徑> <本機資料夾>     其他維護者取得工作複本

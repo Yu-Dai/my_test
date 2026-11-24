@@ -40,7 +40,7 @@ export function remoteStatus(root, { fetch = true } = {}) {
   return { origin, reachable, ahead, behind, error };
 }
 
-function isBareRepo(dir) {
+export function isBareRepo(dir) {
   return fs.existsSync(path.join(dir, 'HEAD')) && fs.existsSync(path.join(dir, 'objects'));
 }
 
@@ -80,7 +80,7 @@ export function shareKb(root, targetArg) {
       `已共享到：${target}`,
       '',
       '告訴使用者：',
-      `- 要用這個知識庫的人，在 wiki MCP 的設定檔 knowledge_bases 加上：{ "remote": ${JSON.stringify(target.split('\\').join('/'))} }`,
+      `- 要用這個知識庫的人，執行：kb mount add ${JSON.stringify(target.split('\\').join('/'))}`,
       `- 其他維護者取得工作複本：kb clone ${target} <本機資料夾>`,
       '之後每次改完內容，執行 kb push 才會讓其他人看到。',
     ].join('\n'),
