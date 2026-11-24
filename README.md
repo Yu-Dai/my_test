@@ -11,7 +11,7 @@
 | --- | --- |
 | 核心函式庫與 `kb` CLI（驗證、索引、搜尋） | 可用 |
 | wiki MCP server（唯讀，五個工具，本機路徑掛載） | 可用 |
-| MCP 圖片取用（`FetchImage`） | 已實作，尚未實測 agent 平台是否把圖片交給模型 |
+| MCP 圖片取用（`FetchImage`） | 可用，已實測 agent 能取得並讀懂圖片 |
 | 維護 skill：init、ingest、commit、lint、query test、undo、rebuild | 可用 |
 | 維護 skill：update（來源有新版時只處理變動的部分） | 可用 |
 | 共享知識庫（bare repo 遠端、本機快取、掛載檢查） | 可用，尚未在網路共享資料夾上實測 |
@@ -145,6 +145,9 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
    之後任何位置都能執行 `kb`。不想用 `npm link` 的話，把下文的 `kb` 換成 `node <repo>/src/cli/kb.js`。
 
 2. 把 [skills/wiki-maintain](skills/wiki-maintain) 資料夾複製到 agent 的 skill 目錄。
+
+   使用者也可以先裝 skill、還沒裝這套工具：skill 一開始會檢查 `kb` 指令，不能用時請使用者到指定路徑安裝。
+   `SKILL.md` 裡的路徑是範例（`//fileserver/share/tools/llm-wiki`），發佈前換成這個專案實際放置的位置。
 
 ### 流程
 
