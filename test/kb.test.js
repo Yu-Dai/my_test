@@ -140,11 +140,12 @@ test('CLI：check、rebuild、validate、search、resolve', () => {
   assert.match(r.stdout, /1\. topic\/alpha/);
   assert.match(kbCli(root, 'search', '沒有').stdout, /查無結果/);
 
-  r = kbCli(root, 'search', '--grep', 'int [bd];', '--scope', 'raw');
+  r = kbCli(root, 'search', '--grep', 'int [bd];', '--scope', 'raw', '--context', '0');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /1\. raw\/code\.c（命中 2 行）\n {3}L2: int b;\n {3}L4: int d;/);
-  assert.match(kbCli(root, 'search', '--grep', 'int c', '--scope', 'raw', '--context', '1').stdout, /L2-L4:\n {9}2 {2}int b;\n {3}> {5}3 {2}int c;\n {9}4 {2}int d;/);
-  assert.match(kbCli(root, 'search', '--grep', '一句話.{2}').stdout, /1\. wiki\/topic\/alpha\.md（命中 1 行）\n {3}L4: summary: 一句話摘要/);
+  assert.match(kbCli(root, 'search', '--grep', 'int c', '--scope', 'raw', '--context', '1').stdout, /L2-L4，命中 L3:\n {9}2 {2}int b;\n {3}> {5}3 {2}int c;\n {9}4 {2}int d;/);
+  assert.match(kbCli(root, 'search', '--grep', '一句話.{2}', '--context', '0').stdout, /1\. wiki\/topic\/alpha\.md（命中 1 行）\n {3}L4: summary: 一句話摘要/);
+  assert.match(kbCli(root, 'search', '--grep', '一句話.{2}').stdout, /L1-L\d+，命中 L4:[\s\S]*已附上命中行前後各 20 行/);
   assert.match(kbCli(root, 'search', '--grep', 'int b(').stdout, /查無結果[\s\S]*--scope raw/);
   assert.match(kbCli(root, 'search', '--grep', 'int b(', '--scope', 'raw').stdout, /已當成一般文字比對/);
   assert.equal(kbCli(root, 'search', '--grep', 'x', 'extra').status, 2);

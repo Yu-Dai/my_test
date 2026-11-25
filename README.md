@@ -120,8 +120,10 @@ MCP 只讀不寫。模型只需要給「知識庫代號」與「頁面代號」�
 
 - `SearchWiki` 兩種搜尋方式擇一：`terms` 適合找主題（依標題、關鍵字、摘要、內文加權排序）；
   `pattern` 適合找有固定格式的東西（函式名、暫存器位址、錯誤碼），不分大小寫、一次比對一行，找程式碼時加 `scope="raw"`。
-  每個命中行會標出所在的函式（程式碼）或章節（markdown），讓模型不用逐筆讀取就能挑；
-  命中的行太像時加 `context=3` 連同前後各 3 行一起回傳（最多 5 行）。函式是用通用規則判斷的，認不出來時不標。
+  樣式的語法與 JavaScript 的 regex 相同，例如「或」寫成 `(a|b)`。
+  每個命中行會標出所在的函式（程式碼）或章節（markdown），讓模型不用逐筆讀取就能挑。函式是用通用規則判斷的，認不出來時不標。
+- `pattern` 的前後文：沒給 `context` 時自動決定，命中 5 行以內附上前後各 20 行，更多時只列出每一行並提示把樣式改得更精確。
+  也可以自己指定 `context`（0 到 50）。前後文一次最多回傳 300 行，放不下的命中只列出那一行。
   樣式寫錯時會當成一般文字比對；比對超過 3 秒會中止並請模型換較簡單的樣式。
 - 每個工具都有輸出上限，超過時截斷並說明如何取得後續。
 - 查無結果或參數錯誤時，回傳會給下一步建議。
@@ -243,7 +245,7 @@ node <repo>/src/cli/kb.js check                    檢查整個知識庫
 node <repo>/src/cli/kb.js validate <頁面檔>        檢查單一頁面
 node <repo>/src/cli/kb.js rebuild                  重新產生 index.md 與搜尋索引
 node <repo>/src/cli/kb.js search <關鍵字...>       搜尋頁面
-node <repo>/src/cli/kb.js search --grep <樣式>     用 regex 逐行比對頁面；加 --scope raw 比對原始來源檔，加 --context <行數> 顯示前後文
+node <repo>/src/cli/kb.js search --grep <樣式>     用 regex 逐行比對頁面；加 --scope raw 比對原始來源檔，--context <行數> 指定前後文
 node <repo>/src/cli/kb.js info                     顯示知識庫名片
 node <repo>/src/cli/kb.js resolve <來源引用>       顯示來源引用所指的內容
 ```

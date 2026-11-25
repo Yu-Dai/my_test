@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { LIMITS, compilePattern, enclosingFunction, formatGrepHits, grepLines, grepSearch } from '../src/core/index.js';
+import { LIMITS, compilePattern, enclosingFunction, formatGrepHits, grepAdvice, grepLines, grepSearch, parseContext } from '../src/core/index.js';
 import { loadConfig } from '../src/mcp/config.js';
 import { Mounts } from '../src/mcp/mounts.js';
 import { fetchImage, fetchRaw, getWikiInfo, normalizePageRef, readWiki, searchWikiTool } from '../src/mcp/tools.js';
@@ -170,16 +170,16 @@ test('grep：樣式編譯、逐行比對、全形半形、排序', () => {
     { path: 'raw/b.c', text: '// ＵＡＲＴ＿ｉｎｉｔ 全形\n' },
     { path: 'raw/c.c', text: 'nothing\n' },
   ] }];
-  const r = grepLines(sources, 'uart_\\w+');
+  const r = grepLines(sources, 'uart_\\w+', { context: 0 });
   assert.deepEqual(r.results.map((x) => [x.path, x.hitCount]), [['raw/a.c', 2], ['raw/b.c', 1]]);
-  assert.deepEqual(r.results[0].hits, [{ line: 1, text: 'int uart_init(void);', where: null }, { line: 3, text: 'void UART_Write(int c);', where: null }]);
+  assert.deepEqual(r.results[0].hits, [{ line: 1, text: 'int uart_init(void);', where: null, expanded: false }, { line: 3, text: 'void UART_Write(int c);', where: null, expanded: false }]);
   assert.equal(r.total, 2);
   // 每個檔案只列前幾行，但命中行數照實計算
   const many = grepLines([{ kb: null, files: [{ path: 'raw/m.c', text: 'x\n'.repeat(20) }] }], 'x');
   assert.equal(many.results[0].hitCount, 20);
   assert.equal(many.results[0].hits.length, LIMITS.grepHitsPerFile);
   // 透過子行程執行的結果相同
-  assert.deepEqual(grepSearch(sources, 'uart_\\w+'), { ok: true, ...r });
+  assert.deepEqual(grepSearch(sources, 'uart_\\w+', { context: 0 }), { ok: true, ...r });
 });
 
 test('grep：標出命中行所在的函式或章節', () => {
@@ -230,25 +230,70 @@ test('grep：context 連同前後幾行回傳，相連的範圍併成一塊', ()
   const text = Array.from({ length: 30 }, (_, i) => ([5, 7, 20].includes(i + 1) ? `hit ${i + 1}` : `line ${i + 1}`)).join('\n');
   const r = grepLines([{ kb: null, files: [{ path: 'raw/a.txt', text }] }], '^hit', { context: 2 }).results[0];
   assert.deepEqual(r.blocks.map((b) => [b.lines[0].line, b.lines.at(-1).line, b.lines.filter((l) => l.hit).map((l) => l.line)]), [[3, 9, [5, 7]], [18, 22, [20]]]);
-  assert.deepEqual(formatGrepHits(r).slice(0, 4), ['   L3-L9:', '         3  line 3', '         4  line 4', '   >     5  hit 5']);
+  assert.deepEqual(formatGrepHits(r).slice(0, 4), ['   L3-L9，命中 L5、L7:', '         3  line 3', '         4  line 4', '   >     5  hit 5']);
   // 檔案開頭與結尾不超出範圍
   const edge = grepLines([{ kb: null, files: [{ path: 'raw/b.txt', text: 'hit\nx\nhit' }] }], '^hit', { context: 5 }).results[0];
   assert.deepEqual(edge.blocks.map((b) => b.lines.map((l) => l.line)), [[1, 2, 3]]);
-  assert.deepEqual(grepLines([{ kb: null, files: [{ path: 'raw/a.txt', text }] }], '^hit').results[0].blocks, []);
+  assert.deepEqual(grepLines([{ kb: null, files: [{ path: 'raw/a.txt', text }] }], '^hit', { context: 0 }).results[0].blocks, []);
+});
+
+test('grep：沒指定 context 時，命中少才自動附前後文', () => {
+  const file = (hits) => [{ kb: null, files: [{ path: 'raw/a.txt', text: Array.from({ length: 200 }, (_, i) => (hits.includes(i + 1) ? 'hit' : `line ${i + 1}`)).join('\n') }] }];
+  const few = grepLines(file([50, 120]), '^hit');
+  assert.deepEqual([few.context, few.auto, few.totalHits, few.expanded, few.collapsed], [LIMITS.grepAutoContext, true, 2, 2, 0]);
+  assert.deepEqual(few.results[0].blocks.map((b) => [b.lines[0].line, b.lines.at(-1).line]), [[30, 70], [100, 140]]);
+  assert.deepEqual(grepAdvice(few, { contextArg: 'X', narrow: 'Y' }), ['已附上命中行前後各 20 行，> 標示命中的行。']);
+
+  const many = grepLines(file([10, 20, 30, 40, 50, 60]), '^hit');
+  assert.deepEqual([many.context, many.auto, many.totalHits, many.expanded], [0, true, 6, 0]);
+  assert.deepEqual(many.results[0].blocks, []);
+  assert.match(grepAdvice(many, { contextArg: '加上 context=20', narrow: 'Y' })[0], /共命中 6 行，超過 5 行，所以只列出每一行[\s\S]*把樣式改得更精確[\s\S]*加上 context=20/);
+  // 明確給 0 就不附，也不用提示
+  const zero = grepLines(file([50]), '^hit', { context: 0 });
+  assert.deepEqual([zero.context, zero.auto, zero.results[0].blocks.length], [0, false, 0]);
+  assert.deepEqual(grepAdvice(zero, { contextArg: 'X', narrow: 'Y' }), []);
+  assert.equal(grepLines(file([50]), '^hit', { context: 999 }).context, LIMITS.grepMaxContext);
+  assert.deepEqual([parseContext(undefined), parseContext(''), parseContext('abc'), parseContext('7'), parseContext(0)], [null, null, null, 7, 0]);
+});
+
+test('grep：前後文總量有上限，超過的命中只列出那一行，且只算這次顯示的結果', () => {
+  const text = (n) => Array.from({ length: 1000 }, (_, i) => ((i + 1) % 200 === 100 ? 'hit' : `${n} line ${i + 1}`)).join('\n');
+  const sources = [{ kb: null, files: [{ path: 'raw/a.txt', text: text('a') }, { path: 'raw/b.txt', text: text('b') }, { path: 'raw/c.txt', text: text('c') }] }];
+  // 每筆 101 行，300 行的額度放得下 2 筆；第 3 筆起只列一行
+  const r = grepLines(sources, '^hit', { context: 50 });
+  assert.deepEqual([r.totalHits, r.expanded, r.collapsed], [15, 2, 13]);
+  assert.deepEqual(r.results.map((x) => x.hits.filter((h) => h.expanded).length), [2, 0, 0]);
+  const lines = formatGrepHits(r.results[0]);
+  assert.equal(lines.filter((l) => /^ {3}L\d+-L\d+，命中/.test(l)).length, 2);
+  assert.deepEqual(lines.slice(-3), ['   L500: hit', '   L700: hit', '   L900: hit']);
+  assert.match(grepAdvice(r, { contextArg: 'X', narrow: '或加上 kb 只比對一個知識庫' })[0], /總量上限是 300 行，只有前 2 筆附上前後文[\s\S]*其餘 13 筆只列出那一行[\s\S]*把樣式改得更精確，或加上 kb 只比對一個知識庫/);
+  // 小的 context 全部放得下
+  const small = grepLines(sources, '^hit', { context: 3 });
+  assert.deepEqual([small.expanded, small.collapsed], [15, 0]);
+  // 翻頁時額度用在這一頁的結果上
+  const page2 = grepLines(sources, '^hit', { context: 50, offset: 1, limit: 1 });
+  assert.deepEqual(page2.results.map((x) => x.hits.filter((h) => h.expanded).length), [0, 2, 0]);
+  assert.deepEqual([page2.expanded, page2.collapsed], [2, 3]);
 });
 
 test('SearchWiki：pattern 的結果標出函式，context 顯示前後文', () => {
   const m = sample();
-  const plain = searchWikiTool(m, { pattern: 'UART_BRR', scope: 'raw' });
+  const plain = searchWikiTool(m, { pattern: 'UART_BRR', scope: 'raw', context: 0 });
   assert.match(plain, /\n {3}L6: #define UART_BRR REG\(0x04\)\n {3}L44（在 uart_set_baud 裡）: UART_BRR = div;/);
-  assert.match(plain, /分不出要看哪一個時：再呼叫一次並加上 context=3/);
+  // 命中少、沒給 context：自動附上前後各 20 行，兩筆的範圍相連所以併成一塊
+  const auto = searchWikiTool(m, { pattern: 'UART_BRR', scope: 'raw' });
+  assert.match(auto, /\n {3}L1-L64，命中 L6、L44（在 uart_set_baud 裡）:\n/);
+  assert.match(auto, /已附上命中行前後各 20 行，> 標示命中的行。/);
   const ctx = searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: '2' });
-  assert.match(ctx, /\n {3}L42-L46（在 uart_set_baud 裡）:\n[\s\S]*\n {3}> {4}44 {6}UART_BRR = div;\n {8}45 {6}return UART_OK;/);
-  assert.doesNotMatch(ctx, /加上 context=3/);
-  // 超過上限的 context 壓回上限，不合法的當成 0
-  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 99 }), /L39-L49/);
-  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 'abc' }), /L44（在 uart_set_baud 裡）: UART_BRR = div;/);
-  assert.match(searchWikiTool(m, { pattern: '四捨五入計算除數' }), /L36（章節：驅動程式的做法）/);
+  assert.match(ctx, /\n {3}L42-L46，命中 L44（在 uart_set_baud 裡）:\n[\s\S]*\n {3}> {4}44 {6}UART_BRR = div;\n {8}45 {6}return UART_OK;/);
+  // 超過上限的 context 壓回上限，不是數字的當成沒給
+  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 99 }), /L1-L94，命中 L44/);
+  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 'abc' }), /L24-L64，命中 L44（在 uart_set_baud 裡）:/);
+  assert.match(searchWikiTool(m, { pattern: '四捨五入計算除數' }), /命中 L36（章節：驅動程式的做法）:/);
+  // 命中多：只列出每一行，並說明怎麼縮小或展開
+  const many = searchWikiTool(m, { pattern: 'uart_', scope: 'raw' });
+  assert.match(many, /共命中 \d+ 行，超過 5 行，所以只列出每一行[\s\S]*再呼叫一次並加上 context=20/);
+  assert.doesNotMatch(many, /\n {3}> /);
 });
 
 test('grep：樣式太複雜時逾時中止，不會卡住', () => {
@@ -263,7 +308,7 @@ test('grep：樣式太複雜時逾時中止，不會卡住', () => {
 
 test('SearchWiki：pattern 逐行比對頁面與原始檔，並指向下一步', () => {
   const m = sample();
-  const raw = searchWikiTool(m, { pattern: 'uart_\\w+_irq', scope: 'raw' });
+  const raw = searchWikiTool(m, { pattern: 'uart_\\w+_irq', scope: 'raw', context: 0 });
   assert.match(raw, /用樣式 "uart_\\\\w\+_irq" 比對（全部 1 個知識庫，原始來源檔）：共 \d+ 個檔案、\d+ 行命中/);
   assert.match(raw, /1\. 知識庫 sample-uart｜raw\/uart_drv\.c（命中 \d+ 行/);
   assert.match(raw, /\n {3}L\d+: .*uart_\w+_irq/i);
