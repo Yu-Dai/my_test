@@ -170,6 +170,8 @@ kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 co
 ```
 
 - 一次處理一份來源，一份來源一筆 commit。
+- 維護 skill 以品質優先：主 agent 只派工，每份來源交給一個新的 subagent 處理，提交後再由另一個 subagent 對照原文檢查並補檢索測試。
+  同一個知識庫不同時處理多份來源。來源超過 5 段（約 1500 行）時，skill 會建議先按章節拆檔。
 - AI 只寫 `wiki/` 的頁面。`index.md`、`log.md`、`.kb/` 只由 `kb` 寫入，被手動改過時 `kb ingest commit` 會擋下。
 - 驗證沒過就不會 commit。錯誤訊息固定包含：哪裡不合格、正確寫法、下一步。
 - `raw/` 只收文字檔。PDF、Office 檔要先用其他工具轉成 markdown（轉檔工具另案開發，不在這個專案內）。
