@@ -49,6 +49,9 @@ export const LIMITS = {
   grepMaxPatternChars: 200, // grep 樣式的長度上限
   grepMaxLineChars: 2000, // grep 時每一行只比對前面這麼多字
   grepTimeoutMs: 3000, // grep 比對的時間上限，超過就中止
+  grepMaxContext: 5, // grep 最多可以連同命中行前後各幾行一起回傳
+  grepContextLineChars: 200, // grep 顯示前後文時每一行的長度上限
+  grepScopeScanLines: 1000, // 找命中行所在的函式時，最多往上看幾行
   ingestPartLines: 300, // ingest 時來源一段幾行
   ingestRelatedPages: 8, // ingest 時列出幾個可能相關的既有頁面
   imageMaxBytes: 1024 * 1024, // 單張圖片大小上限

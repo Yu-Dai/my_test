@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, grepSearch, listFiles, listHeadings, parsePageId, parseSourceRef, pathToPageId, readFilesForGrep,
+  IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, formatGrepHits, grepSearch, listFiles, listHeadings, parsePageId, parseSourceRef, pathToPageId, readFilesForGrep,
   readTextFile, resolveSourceRef, searchRaw, searchWiki, splitLines,
 } from '../core/index.js';
 import { CONFIG_EXAMPLE } from './config.js';
@@ -143,7 +143,8 @@ export function searchWikiTool(mounts, args = {}) {
   const limit = Math.min(Math.max(1, Number(args.limit) || LIMITS.searchDefaultLimit), LIMITS.searchMaxLimit);
   const offset = Math.max(0, Number(args.offset) || 0);
   const where = args.kb ? `知識庫 ${kbs[0].name}` : `全部 ${kbs.length} 個知識庫`;
-  if (pattern.trim()) return grepReport(kbs, pattern, { scope, where, limit, offset, narrowed: Boolean(args.kb) });
+  const context = Math.min(Math.max(0, Math.trunc(Number(args.context) || 0)), LIMITS.grepMaxContext);
+  if (pattern.trim()) return grepReport(kbs, pattern, { scope, where, limit, offset, context, narrowed: Boolean(args.kb) });
   const label = `搜尋「${terms.join('、')}」（${where}，${scope === 'raw' ? '原始來源檔' : '頁面'}）`;
 
   const found = scope === 'wiki'
@@ -184,9 +185,9 @@ export function searchWikiTool(mounts, args = {}) {
 }
 
 /** SearchWiki 的樣式比對：逐行比對頁面檔或原始來源檔，列出命中的行。 */
-function grepReport(kbs, pattern, { scope, where, limit, offset, narrowed }) {
+function grepReport(kbs, pattern, { scope, where, limit, offset, context, narrowed }) {
   const sources = kbs.map((k) => ({ kb: k.name, files: readFilesForGrep(k.root, scope === 'raw' ? k.rawFiles : k.pageList.map((p) => `wiki/${p.id}.md`)) }));
-  const found = grepSearch(sources, pattern);
+  const found = grepSearch(sources, pattern, { context });
   const label = `用樣式 ${q(pattern)} 比對（${where}，${scope === 'raw' ? '原始來源檔' : '頁面'}）`;
   if (!found.ok) {
     const why = found.reason === 'timeout' ? `${found.message}，已中止。這個樣式太複雜（常見原因：巢狀的重複，例如 (a+)+ 或 (.*)*）` : `無法執行（${found.message}）`;
@@ -210,9 +211,10 @@ function grepReport(kbs, pattern, { scope, where, limit, offset, narrowed }) {
     const id = scope === 'raw' ? null : pathToPageId(r.path);
     const what = id ? `頁面 ${id}｜${byName.get(r.kb).pages.get(id)?.title ?? ''}` : r.path;
     out.push(`${offset + i + 1}. 知識庫 ${r.kb}｜${what}（命中 ${r.hitCount} 行${r.hitCount > r.hits.length ? `，顯示前 ${r.hits.length} 行` : ''}）`);
-    for (const h of r.hits) out.push(`   L${h.line}: ${h.text}`);
+    out.push(...formatGrepHits(r));
   });
   out.push('');
+  if (context === 0) out.push(`命中的行太像、分不出要看哪一個時：再呼叫一次並加上 context=3，連同前後各 3 行一起看（> 標示命中的行）。`);
   if (found.total > offset + shown.length) out.push(`還有 ${found.total - offset - shown.length} ${unit}：再呼叫一次並加上 offset=${offset + shown.length}，或改用更精確的樣式。`);
   const first = shown[0];
   if (scope === 'raw') {

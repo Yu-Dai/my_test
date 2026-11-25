@@ -3,5 +3,5 @@
 import fs from 'node:fs';
 import { grepLines } from './grep.js';
 
-const { sources, pattern } = JSON.parse(fs.readFileSync(0, 'utf8'));
-process.stdout.write(JSON.stringify(grepLines(sources, pattern)));
+const { sources, pattern, opts } = JSON.parse(fs.readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(grepLines(sources, pattern, opts)));

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { LIMITS, compilePattern, grepLines, grepSearch } from '../src/core/index.js';
+import { LIMITS, compilePattern, enclosingFunction, formatGrepHits, grepLines, grepSearch } from '../src/core/index.js';
 import { loadConfig } from '../src/mcp/config.js';
 import { Mounts } from '../src/mcp/mounts.js';
 import { fetchImage, fetchRaw, getWikiInfo, normalizePageRef, readWiki, searchWikiTool } from '../src/mcp/tools.js';
@@ -172,7 +172,7 @@ test('grep：樣式編譯、逐行比對、全形半形、排序', () => {
   ] }];
   const r = grepLines(sources, 'uart_\\w+');
   assert.deepEqual(r.results.map((x) => [x.path, x.hitCount]), [['raw/a.c', 2], ['raw/b.c', 1]]);
-  assert.deepEqual(r.results[0].hits, [{ line: 1, text: 'int uart_init(void);' }, { line: 3, text: 'void UART_Write(int c);' }]);
+  assert.deepEqual(r.results[0].hits, [{ line: 1, text: 'int uart_init(void);', where: null }, { line: 3, text: 'void UART_Write(int c);', where: null }]);
   assert.equal(r.total, 2);
   // 每個檔案只列前幾行，但命中行數照實計算
   const many = grepLines([{ kb: null, files: [{ path: 'raw/m.c', text: 'x\n'.repeat(20) }] }], 'x');
@@ -180,6 +180,75 @@ test('grep：樣式編譯、逐行比對、全形半形、排序', () => {
   assert.equal(many.results[0].hits.length, LIMITS.grepHitsPerFile);
   // 透過子行程執行的結果相同
   assert.deepEqual(grepSearch(sources, 'uart_\\w+'), { ok: true, ...r });
+});
+
+test('grep：標出命中行所在的函式或章節', () => {
+  const c = [
+    '#define RESET 1',            // 1
+    'static int helper(int a)',   // 2
+    '{',
+    '    if (check(a)) {',
+    '        buf[0] = RESET;',    // 5
+    '    }',
+    '}',
+    'int global = RESET;',        // 8
+    'int',
+    'nvt_resume(struct dev *d,',  // 10
+    '           int flags)',
+    '{',
+    '    buf[0] = RESET;',        // 13
+    '}',
+    'int proto(int a);',
+  ];
+  const at = (n) => enclosingFunction(c, n - 1);
+  assert.equal(at(1), null);
+  assert.equal(at(5), 'helper');
+  // 上一個函式已經結束，這一行不在任何函式裡
+  assert.equal(at(8), null);
+  assert.equal(at(13), 'nvt_resume');
+  const py = ['class Reader:', '    def read(self):', '        return RESET', 'x = RESET'];
+  assert.equal(enclosingFunction(py, 2), 'read');
+
+  const sources = [{ kb: null, files: [
+    { path: 'raw/a.c', text: c.join('\n') },
+    { path: 'raw/doc.md', text: '前言 RESET\n\n# 1 概觀\n\nRESET 說明\n\n## 1.1 細節\n\n```\nint f(void)\n{\n  RESET;\n}\n```\n' },
+  ] }];
+  const r = grepLines(sources, 'RESET');
+  const where = (p) => r.results.find((x) => x.path === p).hits.map((h) => [h.line, h.where]);
+  assert.deepEqual(where('raw/a.c'), [[1, null], [5, '在 helper 裡'], [8, null], [13, '在 nvt_resume 裡']]);
+  // markdown 用章節，不看程式碼區塊裡的函式
+  assert.deepEqual(where('raw/doc.md'), [[1, null], [5, '章節：1 概觀'], [12, '章節：1.1 細節']]);
+  assert.deepEqual(formatGrepHits(r.results.find((x) => x.path === 'raw/a.c')), [
+    '   L1: #define RESET 1',
+    '   L5（在 helper 裡）: buf[0] = RESET;',
+    '   L8: int global = RESET;',
+    '   L13（在 nvt_resume 裡）: buf[0] = RESET;',
+  ]);
+});
+
+test('grep：context 連同前後幾行回傳，相連的範圍併成一塊', () => {
+  const text = Array.from({ length: 30 }, (_, i) => ([5, 7, 20].includes(i + 1) ? `hit ${i + 1}` : `line ${i + 1}`)).join('\n');
+  const r = grepLines([{ kb: null, files: [{ path: 'raw/a.txt', text }] }], '^hit', { context: 2 }).results[0];
+  assert.deepEqual(r.blocks.map((b) => [b.lines[0].line, b.lines.at(-1).line, b.lines.filter((l) => l.hit).map((l) => l.line)]), [[3, 9, [5, 7]], [18, 22, [20]]]);
+  assert.deepEqual(formatGrepHits(r).slice(0, 4), ['   L3-L9:', '         3  line 3', '         4  line 4', '   >     5  hit 5']);
+  // 檔案開頭與結尾不超出範圍
+  const edge = grepLines([{ kb: null, files: [{ path: 'raw/b.txt', text: 'hit\nx\nhit' }] }], '^hit', { context: 5 }).results[0];
+  assert.deepEqual(edge.blocks.map((b) => b.lines.map((l) => l.line)), [[1, 2, 3]]);
+  assert.deepEqual(grepLines([{ kb: null, files: [{ path: 'raw/a.txt', text }] }], '^hit').results[0].blocks, []);
+});
+
+test('SearchWiki：pattern 的結果標出函式，context 顯示前後文', () => {
+  const m = sample();
+  const plain = searchWikiTool(m, { pattern: 'UART_BRR', scope: 'raw' });
+  assert.match(plain, /\n {3}L6: #define UART_BRR REG\(0x04\)\n {3}L44（在 uart_set_baud 裡）: UART_BRR = div;/);
+  assert.match(plain, /分不出要看哪一個時：再呼叫一次並加上 context=3/);
+  const ctx = searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: '2' });
+  assert.match(ctx, /\n {3}L42-L46（在 uart_set_baud 裡）:\n[\s\S]*\n {3}> {4}44 {6}UART_BRR = div;\n {8}45 {6}return UART_OK;/);
+  assert.doesNotMatch(ctx, /加上 context=3/);
+  // 超過上限的 context 壓回上限，不合法的當成 0
+  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 99 }), /L39-L49/);
+  assert.match(searchWikiTool(m, { pattern: 'UART_BRR =', scope: 'raw', context: 'abc' }), /L44（在 uart_set_baud 裡）: UART_BRR = div;/);
+  assert.match(searchWikiTool(m, { pattern: '四捨五入計算除數' }), /L36（章節：驅動程式的做法）/);
 });
 
 test('grep：樣式太複雜時逾時中止，不會卡住', () => {
