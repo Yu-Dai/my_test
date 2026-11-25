@@ -83,7 +83,7 @@ description: 建立與維護 LLM Wiki 知識庫。使用者要求建立知識庫
 
 > 你是作者。知識庫在 `<知識庫資料夾>`。請用 wiki-maintain skill 的「處理一份來源的步驟」處理這一份來源：`<來源檔>`。
 > 只處理這一份，做到 `kb ingest commit` 顯示「ingest 完成」。不要處理其他來源，不要再派工。
-> `kb ingest start` 顯示來源超過 5 段時，先不要寫頁面：執行 `kb ingest abort`，回報「來源太長」。
+> `kb ingest start` 的第一行會顯示來源「共 N 行」。超過 5000 行時，先不要寫頁面：執行 `kb ingest abort`，回報「來源太長」。
 > `kb ingest commit` 連續 3 次沒通過時，執行 `kb ingest abort`，回報失敗與最後一次的錯誤訊息。
 > 完成後只回報這幾項：來源檔、新增的頁面代號、修改的頁面代號、成功或失敗、沒解決的問題。
 
