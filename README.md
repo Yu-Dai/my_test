@@ -179,7 +179,8 @@ kb ingest abort                放棄這一份，把 wiki/ 還原到上一次 co
 - AI 只寫 `wiki/` 的頁面。`index.md`、`log.md`、`.kb/` 只由 `kb` 寫入，被手動改過時 `kb ingest commit` 會擋下。
 - 驗證沒過就不會 commit。錯誤訊息固定包含：哪裡不合格、正確寫法、下一步。
 - `raw/` 只收文字檔。PDF、Office 檔要先用其他工具轉成 markdown（轉檔工具另案開發，不在這個專案內）。
-  文字檔以副檔名認定（清單在 `src/core/constants.js` 的 `RAW_EXTENSIONS`）；沒有副檔名的檔案（`Makefile`、`Kconfig` 這類）只要內容是 UTF-8 文字就接受。
+  是不是文字檔由內容判斷（不是二進位、而且是 UTF-8），不看副檔名，所以 `Makefile`、`Kconfig.debug`、`foo.defconfig` 這類檔案都可以直接放。
+  PDF、Office 這幾種文件格式一律擋下並提示先轉檔。
 - 來源帶圖片時，把轉檔輸出的 `.md` 與圖片資料夾（例如 `screenshot/`）整包放進 `raw/` 即可。`kb ingest start` 會把該 `.md` 引用到的圖片搬到 `assets/<來源檔名>/`，並把 `.md` 內的圖片路徑改寫成 `assets/…`。
 - 已處理過的來源不可修改。來源有新版時覆蓋原檔，`kb ingest start` 會把它列為「內容有更新」。
 

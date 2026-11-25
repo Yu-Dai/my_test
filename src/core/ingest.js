@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatReport } from './check.js';
 import { queryTestIssues } from './querytest.js';
-import { IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS, RAW_EXTENSIONS } from './constants.js';
+import { CONVERT_FIRST_EXTENSIONS, IMAGE_EXTENSIONS, LIMITS, MARKDOWN_EXTENSIONS } from './constants.js';
 import { changes, git, hasIdentity, headShort, isRepoRoot } from './git.js';
 import { pathToPageId } from './ids.js';
 import { buildSearchIndex, writeIndexes } from './indexgen.js';
@@ -114,11 +114,11 @@ export function ingestStart(root, sourceArg) {
   if (IMAGE_EXTENSIONS.includes(ext)) {
     return fail(`${source} 是圖片，不用單獨處理`, '處理引用這張圖的 .md 來源時，圖片會自動搬到 assets/。執行 kb ingest start 看待處理的來源');
   }
-  if (!RAW_EXTENSIONS.includes(ext)) {
-    return fail(`raw/ 只收文字檔，不接受「${ext}」`, `請先把 ${source} 轉成 .md，把轉出的 .md 與圖片資料夾一起放進 raw/，並把原檔移出 raw/`);
+  if (CONVERT_FIRST_EXTENSIONS.includes(ext)) {
+    return fail(`raw/ 只收文字檔，「${ext}」要先轉檔`, `請先把 ${source} 轉成 .md，把轉出的 .md 與圖片資料夾一起放進 raw/，並把原檔移出 raw/`);
   }
   const probe = readTextFile(abs(root, source));
-  if (probe.binary) return fail(`${source} 是二進位內容，不是文字檔`, '請先轉成 .md 再放進 raw/');
+  if (probe.binary) return fail(`${source} 是二進位內容，不是文字檔`, '文件請先轉成 .md 再放進 raw/；不是文件的二進位檔（執行檔、壓縮檔、韌體映像）請維護者移出 raw/');
   if (!probe.validUtf8) return fail(`${source} 不是 UTF-8 編碼`, '請維護者用編輯器把它另存成 UTF-8（無 BOM）再試一次');
 
   const state = readState(root);

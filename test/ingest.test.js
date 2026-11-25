@@ -99,11 +99,14 @@ test('ingest start：擋下不合格的來源並提示怎麼處理', () => {
   assert.match(ingestStart(notRepo, 'raw/a.md').text, /不是 git repo/);
 });
 
-test('沒有副檔名的文字檔（Makefile、Kconfig）可以當來源', () => {
+test('沒有副檔名或後綴不固定的文字檔（Makefile、Kconfig.debug）可以當來源', () => {
   const root = newKb();
   put(root, 'raw/drv/Makefile', 'obj-y += uart.o\nobj-y += gpio.o\n');
   put(root, 'raw/drv/Kconfig', 'config UART\n\tbool "UART support"\n');
-  assert.match(ingestStart(root).text, /- raw\/drv\/Kconfig（尚未處理）\n- raw\/drv\/Makefile（尚未處理）/);
+  put(root, 'raw/drv/Kconfig.debug', 'config UART_DEBUG\n');
+  assert.match(ingestStart(root).text, /- raw\/drv\/Kconfig（尚未處理）\n- raw\/drv\/Kconfig\.debug（尚未處理）\n- raw\/drv\/Makefile（尚未處理）/);
+  assert.equal(ingestStart(root, 'raw/drv/Kconfig.debug').code, 0);
+  ingestAbort(root);
   const start = ingestStart(root, 'raw/drv/Makefile');
   assert.equal(start.code, 0, start.text);
   assert.match(start.text, /這份來源的寫法：raw\/drv\/Makefile:L起-L迄/);

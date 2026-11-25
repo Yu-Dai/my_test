@@ -22,14 +22,10 @@ export const DEFAULT_MAX_CONFIDENTIALITY = 'internal';
 // 內文固定段落（二級標題），順序固定
 export const BODY_SECTIONS = ['內容', '相關頁面', '來源'];
 
-// raw/ 允許的副檔名。空字串代表沒有副檔名的檔案（Makefile、Kconfig 這類）：是不是文字檔由內容判斷
-export const RAW_EXTENSIONS = [
-  '',
-  '.md', '.markdown', '.txt', '.log',
-  '.c', '.h', '.cpp', '.hpp', '.cc', '.cs', '.py', '.js', '.ts', '.java', '.go', '.rs', '.sh', '.bat', '.ps1',
-  '.html', '.htm', '.xml', '.json', '.yaml', '.yml', '.ini', '.cfg', '.conf', '.toml',
-  '.csv', '.tsv', '.s', '.asm', '.ld', '.dts', '.dtsi', '.mk', '.cmake', '.sql',
-];
+// raw/ 收任何文字檔，是不是文字由內容判斷（不是二進位、而且是 UTF-8），不看副檔名：
+// 原始碼樹裡有很多沒有副檔名或後綴不固定的文字檔（Makefile、Kconfig.debug、foo.defconfig）。
+// 這裡列的是要先轉成 markdown 的文件格式，直接擋下並提示轉檔，不靠內容判斷
+export const CONVERT_FIRST_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf'];
 export const MARKDOWN_EXTENSIONS = ['.md', '.markdown'];
 
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];

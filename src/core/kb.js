@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { IMAGE_EXTENSIONS, RAW_EXTENSIONS } from './constants.js';
+import { CONVERT_FIRST_EXTENSIONS, IMAGE_EXTENSIONS } from './constants.js';
 import { pathToPageId } from './ids.js';
 import { KB_JSON_EXAMPLE, validateKbJson } from './kbjson.js';
 import { validatePage } from './page.js';
@@ -70,12 +70,12 @@ export function loadKb(root, opts = {}) {
   const rawFiles = rawAll.filter((rel) => !rawImages.includes(rel));
   for (const rel of rawFiles) {
     const ext = path.extname(rel).toLowerCase();
-    if (!RAW_EXTENSIONS.includes(ext)) {
-      err('raw-ext', rel, `raw/ 只收文字檔，不接受「${ext}」`, 'PDF、Office 檔請先轉成 .md，把 .md 與圖片資料夾一起放進 raw/');
+    if (CONVERT_FIRST_EXTENSIONS.includes(ext)) {
+      err('raw-ext', rel, `raw/ 只收文字檔，「${ext}」要先轉檔`, 'PDF、Office 檔請先轉成 .md，把 .md 與圖片資料夾一起放進 raw/');
       continue;
     }
     const f = readTextFile(path.join(root, rel));
-    if (f.binary) err('raw-binary', rel, '這個檔案是二進位內容，不是文字檔', '請先轉成 .md 再放進 raw/');
+    if (f.binary) err('raw-binary', rel, '這個檔案是二進位內容，不是文字檔', '文件請先轉成 .md 再放進 raw/；不是文件的二進位檔（執行檔、壓縮檔、韌體映像）請移出 raw/');
     else if (!f.validUtf8) err('raw-encoding', rel, '這個檔案不是 UTF-8 編碼', '用編輯器另存成 UTF-8（無 BOM）後再放進 raw/');
   }
 
