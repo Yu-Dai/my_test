@@ -85,8 +85,9 @@ test('ingest start：擋下不合格的來源並提示怎麼處理', () => {
   const root = newKb();
   put(root, 'raw/doc.pdf', '%PDF');
   put(root, 'raw/bin.txt', Buffer.from([1, 0, 2]));
+  put(root, 'raw/firmware', Buffer.from([1, 0, 2]));
   put(root, 'raw/big5.txt', Buffer.from([0xa4, 0xa4, 0xa4, 0xe5]));
-  const cases = [['raw/doc.pdf', /轉成 \.md[\s\S]*圖片資料夾/], ['raw/bin.txt', /二進位/], ['raw/big5.txt', /不是 UTF-8/], ['raw/nope.md', /找不到來源檔[\s\S]*raw\/spec\.md/], ['raw/../kb.json', /不合法/]];
+  const cases = [['raw/doc.pdf', /轉成 \.md[\s\S]*圖片資料夾/], ['raw/bin.txt', /二進位/], ['raw/firmware', /二進位/], ['raw/big5.txt', /不是 UTF-8/], ['raw/nope.md', /找不到來源檔[\s\S]*raw\/spec\.md/], ['raw/../kb.json', /不合法/]];
   for (const [src, re] of cases) {
     const r = ingestStart(root, src);
     assert.equal(r.code, 1, src);
@@ -96,6 +97,21 @@ test('ingest start：擋下不合格的來源並提示怎麼處理', () => {
   const notRepo = tmp();
   put(notRepo, 'kb.json', '{}');
   assert.match(ingestStart(notRepo, 'raw/a.md').text, /不是 git repo/);
+});
+
+test('沒有副檔名的文字檔（Makefile、Kconfig）可以當來源', () => {
+  const root = newKb();
+  put(root, 'raw/drv/Makefile', 'obj-y += uart.o\nobj-y += gpio.o\n');
+  put(root, 'raw/drv/Kconfig', 'config UART\n\tbool "UART support"\n');
+  assert.match(ingestStart(root).text, /- raw\/drv\/Kconfig（尚未處理）\n- raw\/drv\/Makefile（尚未處理）/);
+  const start = ingestStart(root, 'raw/drv/Makefile');
+  assert.equal(start.code, 0, start.text);
+  assert.match(start.text, /這份來源的寫法：raw\/drv\/Makefile:L起-L迄/);
+  assert.match(start.text, / {4}1 {2}obj-y \+= uart\.o/);
+  put(root, 'wiki/build/makefile.md', draft({ title: '建置設定', sources: '\n  - raw/drv/Makefile:L1-L2' }, '## 內容\n\n編譯 uart 與 gpio。\n\n## 相關頁面\n\n- 無\n\n## 來源\n\n- raw/drv/Makefile:L1-L2\n'));
+  const done = ingestCommit(root);
+  assert.equal(done.code, 0, done.text);
+  assert.deepEqual(readProvenance(root).sources['raw/drv/Makefile'].pages, ['build/makefile']);
 });
 
 test('ingest start：輸出包含步驟、範本、章節、帶行數的來源內容', () => {

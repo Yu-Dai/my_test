@@ -22,8 +22,9 @@ export const DEFAULT_MAX_CONFIDENTIALITY = 'internal';
 // 內文固定段落（二級標題），順序固定
 export const BODY_SECTIONS = ['內容', '相關頁面', '來源'];
 
-// raw/ 允許的副檔名
+// raw/ 允許的副檔名。空字串代表沒有副檔名的檔案（Makefile、Kconfig 這類）：是不是文字檔由內容判斷
 export const RAW_EXTENSIONS = [
+  '',
   '.md', '.markdown', '.txt', '.log',
   '.c', '.h', '.cpp', '.hpp', '.cc', '.cs', '.py', '.js', '.ts', '.java', '.go', '.rs', '.sh', '.bat', '.ps1',
   '.html', '.htm', '.xml', '.json', '.yaml', '.yml', '.ini', '.cfg', '.conf', '.toml',

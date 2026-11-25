@@ -115,7 +115,7 @@ export function ingestStart(root, sourceArg) {
     return fail(`${source} 是圖片，不用單獨處理`, '處理引用這張圖的 .md 來源時，圖片會自動搬到 assets/。執行 kb ingest start 看待處理的來源');
   }
   if (!RAW_EXTENSIONS.includes(ext)) {
-    return fail(`raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, `請先把 ${source} 轉成 .md，把轉出的 .md 與圖片資料夾一起放進 raw/，並把原檔移出 raw/`);
+    return fail(`raw/ 只收文字檔，不接受「${ext}」`, `請先把 ${source} 轉成 .md，把轉出的 .md 與圖片資料夾一起放進 raw/，並把原檔移出 raw/`);
   }
   const probe = readTextFile(abs(root, source));
   if (probe.binary) return fail(`${source} 是二進位內容，不是文字檔`, '請先轉成 .md 再放進 raw/');

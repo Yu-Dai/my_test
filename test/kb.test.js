@@ -59,11 +59,14 @@ test('整庫檢查：斷連結、命名錯誤、raw 格式', () => {
     'wiki/a/b/deep.md': makePage(),
     'wiki/topic/中文.md': makePage(),
     'raw/doc.pdf': 'x',
+    'raw/Makefile': 'obj-y += uart.o\n',
+    'raw/drivers/Kconfig': 'config UART\n\tbool "UART"\n',
+    'raw/firmware': Buffer.from([1, 0, 2]),
     'raw/binary.txt': Buffer.from([1, 0, 2]),
     'raw/big5.txt': Buffer.from([0xa4, 0xa4, 0xa4, 0xe5]),
   });
   const got = codes(checkKb(root).issues).sort();
-  assert.deepEqual(got, ['link-broken', 'page-path', 'page-path', 'page-path', 'raw-binary', 'raw-encoding', 'raw-ext']);
+  assert.deepEqual(got, ['link-broken', 'page-path', 'page-path', 'page-path', 'raw-binary', 'raw-binary', 'raw-encoding', 'raw-ext']);
 });
 
 test('整庫檢查：缺少 kb.json、CRLF 與 BOM 只給警告', () => {

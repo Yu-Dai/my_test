@@ -71,7 +71,7 @@ export function loadKb(root, opts = {}) {
   for (const rel of rawFiles) {
     const ext = path.extname(rel).toLowerCase();
     if (!RAW_EXTENSIONS.includes(ext)) {
-      err('raw-ext', rel, `raw/ 只收文字檔，不接受「${ext || '無副檔名'}」`, 'PDF、Office 檔請先轉成 .md，把 .md 與圖片資料夾一起放進 raw/');
+      err('raw-ext', rel, `raw/ 只收文字檔，不接受「${ext}」`, 'PDF、Office 檔請先轉成 .md，把 .md 與圖片資料夾一起放進 raw/');
       continue;
     }
     const f = readTextFile(path.join(root, rel));
