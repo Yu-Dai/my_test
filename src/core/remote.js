@@ -3,6 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { LIMITS } from './constants.js';
 import { changes, git, isRepoRoot } from './git.js';
 import { STATE_PATH } from './init.js';
 import { UNTRUSTED_REASON, trustLocation, untrustedBy, untrustedNext } from './trust.js';
@@ -112,7 +113,7 @@ export function pushKb(root) {
   if (!r.ok && untrustedBy(r.stderr)) return untrusted(origin, `kb trust "${origin}"，然後再執行一次 kb push`);
   if (!r.ok) return fail(`推送失敗：${lastLine(r.stderr)}`, '可能有人剛好同時推送。執行 kb pull 後再試一次 kb push');
   const pending = changes(root).some((c) => c.path.startsWith('wiki/')) ? '\n注意：wiki/ 還有尚未 commit 的變更，沒有被推送。' : '';
-  return { code: 0, text: `已推送 ${st.ahead} 筆變更到：${origin}\n使用者的 wiki MCP 下次啟動時會取得新內容。${pending}` };
+  return { code: 0, text: `已推送 ${st.ahead} 筆變更到：${origin}\n使用者的 wiki MCP 會在下次啟動時，或使用中每 ${LIMITS.sharedSyncIntervalMinutes} 分鐘檢查一次時取得新內容。${pending}` };
 }
 
 /** kb pull：取得共享位置上別人推送的變更。只做快轉，不自動合併。 */

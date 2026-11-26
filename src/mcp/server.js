@@ -71,7 +71,11 @@ const TOOLS = [
 
 const config = loadConfig(process.argv.slice(2));
 // 先用既有的本機快取掛載，馬上可以用；共享知識庫的更新在連線後於背景進行
-const mounts = new Mounts(config.entries, config.problems, { maxConfidentiality: config.maxConfidentiality, cacheDir: config.cacheDir });
+const mounts = new Mounts(config.entries, config.problems, {
+  maxConfidentiality: config.maxConfidentiality,
+  cacheDir: config.cacheDir,
+  onBackgroundSync: (e) => (e ? console.error(`[wiki-mcp] 更新共享知識庫時發生錯誤：${e.stack ?? e}`) : report()),
+});
 const report = () => {
   for (const p of mounts.problems) console.error(`[wiki-mcp] ${p}`);
   console.error(`[wiki-mcp] 已掛載 ${mounts.names().length} 個知識庫：${mounts.names().join('、') || '（無）'}`);

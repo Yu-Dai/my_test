@@ -45,6 +45,7 @@ export const LIMITS = {
   grepHitsPerFile: 5, // grep 時每個頁面或檔案顯示幾個命中行
   grepMaxPatternChars: 200, // grep 樣式的長度上限
   grepMaxLineChars: 2000, // grep 時每一行只比對前面這麼多字
+  sharedSyncIntervalMinutes: 30, // MCP 使用中，距離上次檢查共享知識庫超過這麼久就再更新一次
   grepTimeoutMs: 3000, // grep 比對的時間上限，超過就中止
   grepMaxContext: 50, // grep 最多可以連同命中行前後各幾行一起回傳
   grepAutoContext: 20, // 沒指定前後文、命中又少的時候，自動附上前後各幾行

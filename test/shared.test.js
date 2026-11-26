@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
-  cloneKb, editCommit, git, ingestCommit, ingestStart, initKb, pullKb, pushKb, remoteStatus, shareKb, validateKbJson,
+  LIMITS, cloneKb, editCommit, git, ingestCommit, ingestStart, initKb, pullKb, pushKb, remoteStatus, shareKb, validateKbJson,
 } from '../src/core/index.js';
 import { cachePathFor, readSyncInfo, syncRemote } from '../src/mcp/cache.js';
 import { loadConfig } from '../src/mcp/config.js';
@@ -328,6 +328,59 @@ test('掛載共享知識庫：下載前、下載後、有新內容、離線', as
   assert.match(offline, /2 頁｜共享（本機快取更新於 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）/);
   assert.match(offline, /注意：這次無法從共享資料夾更新（.+），目前使用的是本機快取，內容可能不是最新的。/);
   assert.match(readWiki(m3, { pages: ['topic/newpage'] }), /標題：newpage/);
+});
+
+test('使用中自動更新：距離上次更新超過間隔，呼叫工具時在背景更新', async () => {
+  const { a, remote, cache } = world();
+  const MINUTE = 60 * 1000;
+  let clock = 1_000_000;
+  const synced = [];
+  const m = new Mounts([{ remote }], [], { cacheDir: cache, now: () => clock, onBackgroundSync: (e) => synced.push(e ?? 'ok') });
+  // 啟動時的第一次更新還沒做之前，呼叫工具不會自己去更新
+  clock += 60 * MINUTE;
+  getWikiInfo(m);
+  assert.equal(m.backgroundSync, null);
+  await m.syncAll();
+  assert.match(getWikiInfo(m), /1 頁｜共享/);
+
+  addPage(a, 'later');
+  pushKb(a);
+  // 還沒到間隔：不更新，內容維持舊的
+  clock += (LIMITS.sharedSyncIntervalMinutes - 1) * MINUTE;
+  assert.match(getWikiInfo(m), /1 頁｜共享/);
+  assert.equal(m.backgroundSync, null);
+
+  // 超過間隔：這次呼叫發起更新但不等它；更新期間再呼叫不會重複發起
+  clock += 2 * MINUTE;
+  assert.match(getWikiInfo(m), /1 頁｜共享（本機快取更新於 .*，正在檢查更新）/);
+  const running = m.backgroundSync;
+  assert.ok(running);
+  getWikiInfo(m);
+  assert.equal(m.backgroundSync, running);
+  await running;
+  assert.deepEqual(synced, ['ok']);
+  assert.equal(m.backgroundSync, null);
+  assert.match(getWikiInfo(m), /2 頁｜共享（本機快取更新於 [^，]*）\n/);
+  assert.match(searchWikiTool(m, { terms: ['later'] }), /頁面 topic\/later/);
+
+  // 共享資料夾連不上：沿用快取並註明，下一個間隔會再試
+  fs.renameSync(remote, `${remote}.gone`);
+  clock += (LIMITS.sharedSyncIntervalMinutes + 1) * MINUTE;
+  getWikiInfo(m);
+  await m.backgroundSync;
+  assert.match(getWikiInfo(m), /2 頁｜共享[\s\S]*這次無法從共享資料夾更新/);
+  fs.renameSync(`${remote}.gone`, remote);
+  clock += (LIMITS.sharedSyncIntervalMinutes + 1) * MINUTE;
+  getWikiInfo(m);
+  await m.backgroundSync;
+  assert.doesNotMatch(getWikiInfo(m), /這次無法從共享資料夾更新/);
+
+  // 只有本機知識庫時不會發起更新
+  const local = new Mounts([{ path: SAMPLE_KB }], [], { now: () => clock });
+  await local.syncAll();
+  clock += 999 * MINUTE;
+  getWikiInfo(local);
+  assert.equal(local.backgroundSync, null);
 });
 
 test('掛載共享知識庫：連不上又沒有快取、機密等級不允許', async () => {

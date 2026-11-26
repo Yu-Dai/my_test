@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY, buildSearchIndex, loadKb, readTextFile, sortedPages } from '../core/index.js';
+import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY, LIMITS, buildSearchIndex, loadKb, readTextFile, sortedPages } from '../core/index.js';
 import { cachePathFor, readSyncInfo, syncRemote } from './cache.js';
 import { KB_CLI, defaultCacheDir } from './config.js';
 
@@ -23,11 +23,16 @@ export class Mounts {
   /**
    * @param {(string|{ path?: string, remote?: string })[]} entries 知識庫：本機資料夾，或共享資料夾上的 bare repo
    * @param {string[]} [problems] 設定檔階段就發現的問題
-   * @param {{ maxConfidentiality?: string, cacheDir?: string }} [opts]
+   * @param {{ maxConfidentiality?: string, cacheDir?: string, now?: () => number, onBackgroundSync?: (error?: Error) => void }} [opts]
+   *   now：目前時間（毫秒），測試用；onBackgroundSync：使用中自動更新結束時呼叫，失敗時帶錯誤
    */
   constructor(entries, problems = [], opts = {}) {
     this.maxConfidentiality = opts.maxConfidentiality ?? DEFAULT_MAX_CONFIDENTIALITY;
     this.cacheDir = opts.cacheDir ?? defaultCacheDir();
+    this.now = opts.now ?? Date.now;
+    this.onBackgroundSync = opts.onBackgroundSync ?? (() => {});
+    this.lastSyncAt = null; // 上次開始更新共享知識庫的時間；還沒更新過是 null
+    this.backgroundSync = null; // 進行中的自動更新
     this.entries = entries.map((e) => {
       if (typeof e === 'string') return { path: e };
       if (e.remote) return { remote: e.remote, path: cachePathFor(this.cacheDir, e.remote), sync: { state: 'pending', error: null } };
@@ -82,7 +87,10 @@ export class Mounts {
       index: buildSearchIndex(kb),
       rawFiles: kb.rawFiles,
       stamp: stamp(root),
-      shared: entry.remote ? { remote: entry.remote, synced: readSyncInfo(root)?.synced ?? null, state: entry.sync.state, error: entry.sync.error } : null,
+      // state 與 error 讀的是當下的更新狀態：背景更新開始時不會重新載入知識庫
+      shared: entry.remote
+        ? { remote: entry.remote, synced: readSyncInfo(root)?.synced ?? null, get state() { return entry.sync.state; }, get error() { return entry.sync.error; } }
+        : null,
     });
   }
 
@@ -91,6 +99,7 @@ export class Mounts {
    * 更新失敗（例如離線）時沿用既有快取。
    */
   async syncAll() {
+    this.lastSyncAt = this.now();
     for (const entry of this.entries.filter((e) => e.remote)) {
       entry.sync = { state: 'syncing', error: null };
       const r = await syncRemote(entry.remote, entry.path);
@@ -101,8 +110,24 @@ export class Mounts {
     }
   }
 
-  /** 知識庫內容有變動時重新載入。每次工具呼叫前執行。 */
+  /**
+   * 使用中的自動更新：距離上次更新夠久就在背景再更新一次，這次呼叫照常用目前的快取，不等它。
+   * 只在有人呼叫工具時檢查，閒置時不會去連共享資料夾。啟動時的第一次更新由 server 發起，在那之前不自動更新。
+   */
+  #syncIfStale() {
+    if (this.lastSyncAt === null || this.backgroundSync) return;
+    if (this.now() - this.lastSyncAt < LIMITS.sharedSyncIntervalMinutes * 60 * 1000) return;
+    if (!this.entries.some((e) => e.remote)) return;
+    this.backgroundSync = this.syncAll()
+      .then(() => this.onBackgroundSync(), (e) => this.onBackgroundSync(e))
+      .finally(() => {
+        this.backgroundSync = null;
+      });
+  }
+
+  /** 知識庫內容有變動時重新載入，並視需要發起自動更新。每次工具呼叫前執行。 */
   refresh() {
+    this.#syncIfStale();
     for (const kb of this.kbs.values()) {
       if (stamp(kb.root) !== kb.stamp) {
         this.reload();
