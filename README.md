@@ -58,6 +58,8 @@ kb config path                 顯示設定檔位置
 - 設定項目 `max_confidentiality`：可掛載的最高機密等級，`public`、`internal`、`confidential` 由低到高，預設 `internal`。
   知識庫的 `kb.json` 等級比它高就不會掛載。調高時要加 `--yes`，由使用者本人確認這個環境可以使用該等級的資料。
 - 設定項目 `cache_dir`：共享知識庫的本機快取位置，預設 `~/.llm-wiki/cache`（也可用環境變數 `LLM_WIKI_CACHE`）。
+- 共享位置在網路磁碟機上時，git 預設會拒絕讀取（它無法確認儲存庫的擁有者是你），`kb mount add` 會說明原因。
+  確定那個位置可以信任時，加上 `--trust` 重新執行：`kb mount add <共享路徑> --trust`。細節見下方「共享知識庫」。
 - **修改設定後要重新啟動 MCP 才生效。**
 - 要用另一份設定檔時，加上 `--config <路徑>` 或設定環境變數 `LLM_WIKI_CONFIG`。指定位置的設定檔不會自動建立。
 - 設定檔的格式見 [config.example.json](config.example.json)。停用的知識庫存在 `disabled_knowledge_bases`。
@@ -223,11 +225,21 @@ kb rebuild             重新產生 index.md 與搜尋索引
 
 ```
 kb share <共享資料夾>/<代號>.git     第一次共享：建立儲存庫並推送，輸出使用者要執行的 kb mount add 指令
+kb trust <共享路徑>                 信任共享位置（git 拒絕讀取時使用，見下方說明）
 kb push                             把本機的變更推到共享位置
 kb pull                             取得別人推送的變更
-kb clone <共享路徑> <本機資料夾>     其他維護者取得工作複本
+kb clone <共享路徑> <本機資料夾>     其他維護者取得工作複本；可加 --trust
 ```
 
+- 共享位置上只會有 git 的儲存檔案（`HEAD`、`objects`、`refs`），看不到 `kb.json` 與頁面是正常的。使用者掛載後，MCP 會把內容取出到本機快取。
+- **git 拒絕讀取共享位置時**：共享位置在網路磁碟機上，或資料夾的擁有者不是你時，git 無法確認儲存庫是你的，會拒絕操作
+  （原文是 `detected dubious ownership`）。在這種環境裡，每個人、每個共享知識庫都會遇到一次。
+  `kb` 不會自動信任任何位置；確定可以信任時，用下面任一種方式，`kb` 會把那個位置加進 git 全域設定的 `safe.directory`：
+  - 使用者第一次掛載：`kb mount add <共享路徑> --trust`
+  - 維護者第一次取得工作複本：`kb clone <共享路徑> <本機資料夾> --trust`
+  - 其他情況（`kb push`、`kb pull`、MCP 更新快取被拒絕）：`kb trust <共享路徑>`
+
+  信任之後，能寫入那個資料夾的人都能影響你電腦上 git 的行為，所以只信任自己人維護的位置。每台電腦、每個共享位置設定一次即可。
 - 作業習慣：開始前 `kb pull`，完成後 `kb push`。
 - 別人推送了新變更時，`kb ingest start` 與 `kb push` 會要求先 `kb pull`。
 - 兩位維護者各自做了變更、誰都還沒取得對方的版本時，**不會自動合併**：索引、對應表、log 是產生出來的檔案，

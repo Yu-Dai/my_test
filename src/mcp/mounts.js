@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY, buildSearchIndex, loadKb, readTextFile, sortedPages } from '../core/index.js';
 import { cachePathFor, readSyncInfo, syncRemote } from './cache.js';
-import { defaultCacheDir } from './config.js';
+import { KB_CLI, defaultCacheDir } from './config.js';
 
 function stamp(root) {
   // 知識庫的任何寫入（ingest、rebuild、快取更新）都會更新這幾個檔案
@@ -49,7 +49,8 @@ export class Mounts {
     const root = entry.path;
     const label = entry.remote ? `共享知識庫 ${entry.remote}` : root;
     if (entry.remote && !fs.existsSync(path.join(root, '.git'))) {
-      if (entry.sync.state === 'failed') this.problems.push(`${label} 沒有掛載：無法從共享資料夾下載，本機也沒有快取（${entry.sync.error}）。確認共享資料夾連得上、路徑正確，然後重新啟動 MCP`);
+      if (entry.sync.untrusted) this.problems.push(`${label} 沒有掛載：${entry.sync.error}，然後重新啟動 MCP`);
+      else if (entry.sync.state === 'failed') this.problems.push(`${label} 沒有掛載：無法從共享資料夾下載，本機也沒有快取（${entry.sync.error}）。確認共享資料夾連得上、路徑正確，然後重新啟動 MCP`);
       else this.problems.push(`${label} 正在第一次下載到本機快取，稍後再呼叫一次 GetWikiInfo`);
       return;
     }
@@ -93,7 +94,9 @@ export class Mounts {
     for (const entry of this.entries.filter((e) => e.remote)) {
       entry.sync = { state: 'syncing', error: null };
       const r = await syncRemote(entry.remote, entry.path);
-      entry.sync = r.ok ? { state: 'ok', error: null } : { state: 'failed', error: r.error };
+      // 只用 MCP 的使用者不一定把 kb 加進 PATH，所以給完整的執行方式
+      const error = r.untrusted ? `${r.error}。確定這個位置可以信任時，請使用者在終端機執行：node "${KB_CLI}" trust "${entry.remote}"` : r.error;
+      entry.sync = r.ok ? { state: 'ok', error: null } : { state: 'failed', error, untrusted: r.untrusted };
       this.reload();
     }
   }

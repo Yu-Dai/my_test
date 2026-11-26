@@ -151,7 +151,8 @@ export function ingestStart(root, sourceArg) {
   const cats = [...new Set([...kb.pages.keys()].map((id) => id.split('/')[0]))];
 
   const notices = [];
-  if (rs.origin && !rs.reachable) notices.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
+  if (rs.origin && rs.untrusted) notices.push(`注意：${rs.error}，所以無法確認別人有沒有推送新變更。可以繼續作業；推送前請使用者執行 kb trust "${rs.origin}"。`);
+  else if (rs.origin && !rs.reachable) notices.push('注意：連不到共享位置，無法確認別人有沒有推送新變更。可以繼續作業，推送前再確認。');
   if (adopted.moved.length) notices.push(`已把這份來源引用的 ${adopted.moved.length} 張圖片搬到 ${path.posix.dirname(adopted.moved[0].to)}/，來源內的圖片路徑已改成 assets/ 開頭。`);
   if (adopted.missing.length) notices.push(`注意：來源引用了這些圖片，但找不到檔案：${adopted.missing.join('、')}。頁面不要引用這些圖；請維護者把圖片放到來源旁邊後重新執行 kb ingest start ${source}。`);
   if (dirty.length && !state?.update) notices.push(`注意：wiki/ 已經有尚未 commit 的變更（${dirty.map((c) => c.path).join('、')}），它們會算進這次 ingest。不想保留就先執行 kb ingest abort。`);

@@ -8,6 +8,7 @@ import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY } from './constants
 import { git } from './git.js';
 import { validateKbJson } from './kbjson.js';
 import { isBareRepo } from './remote.js';
+import { UNTRUSTED_REASON, trustLocation, untrustedBy, untrustedNext } from './trust.js';
 import {
   KEY_CACHE_DIR, KEY_DISABLED, KEY_MAX_CONFIDENTIALITY, KEY_MOUNTS, defaultCacheDir, openUserConfig, resolveConfigPath, saveUserConfig,
 } from './userconfig.js';
@@ -56,7 +57,8 @@ function parseItem(item, base) {
 
 /**
  * 讀出知識庫的 kb.json。共享知識庫直接從儲存庫讀，不需要先下載。
- * @returns {{ meta: object|null, problem: string|null }} 無法檢查內容的遠端網址回傳 meta 與 problem 都是 null
+ * @returns {{ meta: object|null, problem: string|null, untrusted?: boolean }} 無法檢查內容的遠端網址回傳 meta 與 problem 都是 null；
+ *   untrusted：被 git 以無法確認擁有者為由拒絕
  */
 function inspect(kind, target) {
   let text;
@@ -82,6 +84,7 @@ function inspect(kind, target) {
     if (!fs.existsSync(dir)) return { meta: null, problem: '找不到這個路徑（共享資料夾連不上，或路徑錯誤）' };
     if (!isBareRepo(dir)) return { meta: null, problem: '不是共享儲存庫' };
     const r = git(dir, ['show', 'HEAD:kb.json']);
+    if (!r.ok && untrustedBy(r.stderr)) return { meta: null, problem: UNTRUSTED_REASON, untrusted: true };
     if (!r.ok) return { meta: null, problem: `讀不到儲存庫裡的 kb.json（${lastLine(r.stderr)}）` };
     text = r.stdout;
   } else {
@@ -122,6 +125,7 @@ function refusal(ctx, meta, label) {
 
 function describe(e, max, names) {
   const head = `- ${e.meta?.name ?? '（代號不明）'}  ${KIND_LABEL[e.kind] ?? '無效'}  ${e.target}`;
+  if (e.untrusted) return `${head}\n    [有問題] ${e.problem}。確定可以信任時執行：kb trust "${e.target}"`;
   if (e.problem) return `${head}\n    [有問題] ${e.problem}`;
   if (!e.meta) return `${head}\n    內容要等 wiki MCP 下載後才能檢查`;
   if (e.key === KEY_MOUNTS && levelOf(e.meta.confidentiality) > levelOf(max)) {
@@ -148,7 +152,10 @@ export function mountList(where) {
   });
 }
 
-export function mountAdd(where, targetArg) {
+/**
+ * @param {{ trust?: boolean }} [opts] trust：git 以無法確認擁有者為由拒絕時，把這個位置加進 git 的信任清單再繼續
+ */
+export function mountAdd(where, targetArg, { trust = false } = {}) {
   return withConfig(where, (ctx) => {
     const usage = 'kb mount add <知識庫資料夾>，或 kb mount add <共享資料夾>/<代號>.git';
     if (!targetArg) return fail('沒有指定要加入的知識庫', usage);
@@ -161,7 +168,14 @@ export function mountAdd(where, targetArg) {
       else if (!isBareRepo(target)) return fail(`${target} 不是知識庫資料夾（沒有 kb.json），也不是共享儲存庫`, usage);
     }
     const label = `${KIND_LABEL[kind]}知識庫 ${target}`;
-    const { meta, problem } = inspect(kind, target);
+    let found = inspect(kind, target);
+    if (found.untrusted) {
+      if (!trust) return fail(`${label} 無法加入：${UNTRUSTED_REASON}`, untrustedNext(`kb mount add "${target}" --trust`));
+      const trusted = trustLocation(target);
+      if (trusted.code !== 0) return trusted;
+      found = inspect(kind, target);
+    }
+    const { meta, problem } = found;
     if (problem) return fail(`${label} 無法加入：${problem}`, '請知識庫維護者確認這個位置的內容');
 
     if (entries(ctx, KEY_MOUNTS).some((e) => e.target === target)) return { code: 0, text: `${label} 已經在設定檔裡，沒有變更。` };

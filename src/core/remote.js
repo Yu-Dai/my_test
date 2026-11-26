@@ -5,9 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { changes, git, isRepoRoot } from './git.js';
 import { STATE_PATH } from './init.js';
+import { UNTRUSTED_REASON, trustLocation, untrustedBy, untrustedNext } from './trust.js';
 
 const fail = (message, next) => ({ code: 1, text: `[錯誤] ${message}${next ? `\n  下一步：${next}` : ''}` });
 const lastLine = (s) => s.split('\n').filter(Boolean).pop() ?? '';
+const untrusted = (where, command) => fail(`${UNTRUSTED_REASON}：${where}`, untrustedNext(command));
 const branchOf = (root) => git(root, ['branch', '--show-current']).stdout.trim() || 'main';
 
 export function originUrl(root) {
@@ -17,27 +19,30 @@ export function originUrl(root) {
 
 /**
  * 與遠端的差距。fetch 失敗（離線）時 reachable 為 false，ahead/behind 依上次已知的狀態計算。
- * @returns {{ origin: string|null, reachable: boolean, ahead: number, behind: number, error: string|null }}
+ * @returns {{ origin: string|null, reachable: boolean, untrusted: boolean, ahead: number, behind: number, error: string|null }}
+ *   untrusted：連不上的原因是 git 無法確認共享位置的擁有者而拒絕
  */
 export function remoteStatus(root, { fetch = true } = {}) {
   const origin = originUrl(root);
-  if (!origin) return { origin: null, reachable: false, ahead: 0, behind: 0, error: null };
+  if (!origin) return { origin: null, reachable: false, untrusted: false, ahead: 0, behind: 0, error: null };
   const branch = branchOf(root);
   let reachable = true;
+  let isUntrusted = false;
   let error = null;
   if (fetch) {
     const f = git(root, ['fetch', '--quiet', 'origin']);
     reachable = f.ok;
-    error = f.ok ? null : lastLine(f.stderr);
+    isUntrusted = !f.ok && Boolean(untrustedBy(f.stderr));
+    error = f.ok ? null : isUntrusted ? UNTRUSTED_REASON : lastLine(f.stderr);
   }
   const r = git(root, ['rev-list', '--left-right', '--count', `HEAD...origin/${branch}`]);
   if (!r.ok) {
     // 遠端還沒有這個分支（剛建立、尚未推送）
     const n = Number(git(root, ['rev-list', '--count', 'HEAD']).stdout.trim()) || 0;
-    return { origin, reachable, ahead: n, behind: 0, error };
+    return { origin, reachable, untrusted: isUntrusted, ahead: n, behind: 0, error };
   }
   const [ahead, behind] = r.stdout.trim().split(/\s+/).map(Number);
-  return { origin, reachable, ahead, behind, error };
+  return { origin, reachable, untrusted: isUntrusted, ahead, behind, error };
 }
 
 export function isBareRepo(dir) {
@@ -62,6 +67,7 @@ export function shareKb(root, targetArg) {
   let created = false;
   if (!fs.existsSync(target) || fs.readdirSync(target).length === 0) {
     const r = git(root, ['init', '--quiet', '--bare', '-b', branchOf(root), target]);
+    if (!r.ok && untrustedBy(r.stderr)) return untrusted(target, `kb trust "${path.dirname(target)}"`);
     if (!r.ok) return fail(`無法在 ${target} 建立共享儲存庫：${lastLine(r.stderr)}`, '確認共享資料夾連得上，而且你有寫入權限');
     created = true;
   } else if (!isBareRepo(target)) {
@@ -71,6 +77,7 @@ export function shareKb(root, targetArg) {
   const push = git(root, ['push', '--quiet', '-u', 'origin', branchOf(root)]);
   if (!push.ok) {
     git(root, ['remote', 'remove', 'origin']);
+    if (untrustedBy(push.stderr)) return untrusted(target, `kb trust "${target}"，然後再執行一次 kb share "${target}"`);
     const hint = created ? '確認共享資料夾的寫入權限' : '這個位置已經有別的知識庫的內容。換一個路徑；如果是要加入既有的共享知識庫，請用 kb clone';
     return fail(`推送到 ${target} 失敗：${lastLine(push.stderr)}`, hint);
   }
@@ -80,9 +87,11 @@ export function shareKb(root, targetArg) {
       `已共享到：${target}`,
       '',
       '告訴使用者：',
-      `- 要用這個知識庫的人，執行：kb mount add ${JSON.stringify(target.split('\\').join('/'))}`,
+      `- 要用這個知識庫的人，執行：kb mount add ${JSON.stringify(target.split('\\').join('/'))} --trust`,
+      '  （--trust：共享位置在網路磁碟機上時，git 預設會拒絕讀取，加上它表示信任這個位置）',
       `- 其他維護者取得工作複本：kb clone ${target} <本機資料夾>`,
       '之後每次改完內容，執行 kb push 才會讓其他人看到。',
+      '共享位置上只會有 git 的儲存檔案（HEAD、objects、refs），看不到 kb.json 與頁面是正常的。',
     ].join('\n'),
   };
 }
@@ -93,12 +102,14 @@ export function pushKb(root) {
   const origin = originUrl(root);
   if (!origin) return fail('這個知識庫還沒有設定共享位置', '第一次共享：kb share <共享資料夾路徑>/<知識庫代號>.git');
   const st = remoteStatus(root);
+  if (st.untrusted) return untrusted(origin, `kb trust "${origin}"，然後再執行一次 kb push`);
   if (!st.reachable) return fail(`連不到共享位置 ${origin}（${st.error}）`, '確認共享資料夾連得上再試一次。本機的變更都還在，不會遺失');
   if (st.behind > 0) {
     return fail(`共享位置有 ${st.behind} 筆別人推送的新變更，要先取得才能推送`, st.ahead > 0 ? '執行 kb pull（它會說明怎麼處理兩邊都有變更的情況）' : '執行 kb pull');
   }
   if (st.ahead === 0) return { code: 0, text: `沒有需要推送的變更，共享位置已經是最新的：${origin}` };
   const r = git(root, ['push', '--quiet', 'origin', branchOf(root)]);
+  if (!r.ok && untrustedBy(r.stderr)) return untrusted(origin, `kb trust "${origin}"，然後再執行一次 kb push`);
   if (!r.ok) return fail(`推送失敗：${lastLine(r.stderr)}`, '可能有人剛好同時推送。執行 kb pull 後再試一次 kb push');
   const pending = changes(root).some((c) => c.path.startsWith('wiki/')) ? '\n注意：wiki/ 還有尚未 commit 的變更，沒有被推送。' : '';
   return { code: 0, text: `已推送 ${st.ahead} 筆變更到：${origin}\n使用者的 wiki MCP 下次啟動時會取得新內容。${pending}` };
@@ -113,6 +124,7 @@ export function pullKb(root) {
     return fail('有尚未 commit 的頁面變更', '先完成（kb ingest commit 或 kb commit "說明"）或放棄（kb ingest abort），再執行 kb pull');
   }
   const st = remoteStatus(root);
+  if (st.untrusted) return untrusted(origin, `kb trust "${origin}"，然後再執行一次 kb pull`);
   if (!st.reachable) return fail(`連不到共享位置 ${origin}（${st.error}）`, '確認共享資料夾連得上再試一次');
   if (st.behind === 0) return { code: 0, text: `已經是最新的，沒有新的變更。${st.ahead ? `本機有 ${st.ahead} 筆變更尚未推送：kb push` : ''}` };
   if (st.ahead > 0) {
@@ -131,13 +143,22 @@ export function pullKb(root) {
   return { code: 0, text: `已取得 ${st.behind} 筆新變更，現在與共享位置一致。` };
 }
 
-/** kb clone：其他維護者從共享位置取得工作複本。 */
-export function cloneKb(remoteArg, dirArg) {
+/**
+ * kb clone：其他維護者從共享位置取得工作複本。
+ * @param {{ trust?: boolean }} [opts] trust：git 以無法確認擁有者為由拒絕時，把共享位置加進 git 的信任清單再繼續
+ */
+export function cloneKb(remoteArg, dirArg, { trust = false } = {}) {
   if (!remoteArg || !dirArg) return fail('需要共享位置與本機資料夾', 'kb clone <共享資料夾路徑>/<知識庫代號>.git <本機資料夾>');
   const remote = path.resolve(remoteArg);
   const dir = path.resolve(dirArg);
   if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) return fail(`${dir} 已經存在而且不是空的`, '換一個新的資料夾路徑');
-  const r = git(process.cwd(), ['clone', '--quiet', remote, dir]);
+  let r = git(process.cwd(), ['clone', '--quiet', remote, dir]);
+  if (!r.ok && untrustedBy(r.stderr)) {
+    if (!trust) return untrusted(remote, `kb clone "${remote}" "${dir}" --trust`);
+    const trusted = trustLocation(remote);
+    if (trusted.code !== 0) return trusted;
+    r = git(process.cwd(), ['clone', '--quiet', remote, dir]);
+  }
   if (!r.ok) return fail(`無法從 ${remote} 取得知識庫：${lastLine(r.stderr)}`, '確認共享資料夾連得上、路徑正確');
   if (!fs.existsSync(path.join(dir, 'kb.json'))) {
     fs.rmSync(dir, { recursive: true, force: true });

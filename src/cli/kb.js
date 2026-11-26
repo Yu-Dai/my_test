@@ -10,7 +10,7 @@ import {
   initKb, ingestAbort, ingestCommit, ingestKeep, ingestPart, ingestStart, ingestStatus,
   cloneKb, pullKb, pushKb, shareKb,
   changes, editCommit, git, isRepoRoot, lintKb, queryTestAdd, queryTestRemove, queryTestRun, undoLast,
-  configGet, configPath, configSet, configUnset, mountAdd, mountDisable, mountEnable, mountList, mountRemove,
+  trustLocation, configGet, configPath, configSet, configUnset, mountAdd, mountDisable, mountEnable, mountList, mountRemove,
 } from '../core/index.js';
 
 const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
@@ -37,11 +37,12 @@ const USAGE = `用法：kb <指令> [參數] [--kb <知識庫路徑>]
   share <共享路徑>      第一次把知識庫放上共享資料夾，慣例路徑 <共享資料夾>/<代號>.git
   push                  把本機的變更推到共享位置
   pull                  取得共享位置上別人推送的變更
-  clone <共享路徑> <資料夾>  從共享位置取得工作複本（其他維護者用）
+  clone <共享路徑> <資料夾>  從共享位置取得工作複本（其他維護者用）；可加 --trust
+  trust <共享路徑>      信任共享位置。git 以「無法確認擁有者」拒絕讀取時使用，常見於網路磁碟機
 
 使用端指令（設定 wiki MCP 要掛載哪些知識庫，不需要在知識庫資料夾內執行）：
   mount list            列出設定檔裡的知識庫與檢查結果
-  mount add <路徑>      加入知識庫：本機的知識庫資料夾，或共享資料夾上的 <代號>.git
+  mount add <路徑>      加入知識庫：本機的知識庫資料夾，或共享資料夾上的 <代號>.git；可加 --trust
   mount remove <代號或路徑>   從設定檔移除（不會刪除知識庫的檔案）
   mount disable <代號或路徑>  暫時不掛載，設定保留
   mount enable <代號或路徑>   重新啟用
@@ -69,6 +70,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--draft') opts.draft = true;
     else if (a === '--yes') opts.yes = true;
+    else if (a === '--trust') opts.trust = true;
     else if (a === '--help' || a === '-h') opts.help = true;
     else if (a.startsWith('--')) opts[a.slice(2)] = argv[++i];
     else opts._.push(a);
@@ -149,14 +151,18 @@ const commands = {
   },
 
   clone(opts) {
-    return done(cloneKb(opts._[0], opts._[1]));
+    return done(cloneKb(opts._[0], opts._[1], { trust: opts.trust }));
+  },
+
+  trust(opts) {
+    return done(trustLocation(opts._[0]));
   },
 
   mount(opts) {
     const sub = opts._.shift();
     const subs = { list: mountList, add: mountAdd, remove: mountRemove, enable: mountEnable, disable: mountDisable };
     if (!subs[sub]) fail(`mount 後面要接 list、add、remove、enable、disable 其中之一${sub ? `，目前是「${sub}」` : ''}`, '看目前掛載了哪些知識庫：kb mount list');
-    return done(subs[sub]({ config: opts.config }, opts._[0]));
+    return done(subs[sub]({ config: opts.config }, opts._[0], { trust: opts.trust }));
   },
 
   config(opts) {

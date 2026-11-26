@@ -100,11 +100,12 @@ test('share：建立共享儲存庫並推送，說明使用者要怎麼設定', 
   const r = shareKb(a, remote);
   assert.equal(r.code, 0, r.text);
   assert.match(r.text, /已共享到：/);
-  assert.match(r.text, /kb mount add ".*share\/shared-kb\.git"/);
+  assert.match(r.text, /kb mount add ".*share\/shared-kb\.git" --trust/);
+  assert.match(r.text, /看不到 kb\.json 與頁面是正常的/);
   assert.match(r.text, /kb clone /);
   assert.ok(fs.existsSync(path.join(remote, 'HEAD')));
   assert.equal(git(remote, ['rev-parse', 'main']).stdout.trim(), head(a));
-  assert.deepEqual(remoteStatus(a), { origin: remote, reachable: true, ahead: 0, behind: 0, error: null });
+  assert.deepEqual(remoteStatus(a), { origin: remote, reachable: true, untrusted: false, ahead: 0, behind: 0, error: null });
   // 共享資料夾的路徑只在 git 設定裡，沒有寫進知識庫的內容
   assert.equal(git(a, ['status', '--porcelain']).stdout, '');
   assert.equal(git(a, ['grep', '-l', 'shared-kb.git']).stdout, '');
@@ -256,7 +257,7 @@ test('快取：第一次下載、之後更新並對齊遠端', async () => {
   assert.notEqual(cachePathFor(cache, `${remote}2`), dir);
   assert.equal(readSyncInfo(dir), null);
 
-  assert.deepEqual(await syncRemote(remote, dir), { ok: true, error: null });
+  assert.deepEqual(await syncRemote(remote, dir), { ok: true, error: null, untrusted: false });
   assert.equal(head(dir), head(a));
   const first = readSyncInfo(dir);
   assert.equal(first.remote, remote);
@@ -267,7 +268,7 @@ test('快取：第一次下載、之後更新並對齊遠端', async () => {
   pushKb(a);
   put(dir, 'wiki/topic/alpha.md', '被改壞');
   put(dir, 'wiki/topic/stray.md', '多出來的檔案');
-  assert.deepEqual(await syncRemote(remote, dir), { ok: true, error: null });
+  assert.deepEqual(await syncRemote(remote, dir), { ok: true, error: null, untrusted: false });
   assert.equal(head(dir), head(a));
   assert.equal(read(dir, 'wiki/topic/alpha.md'), read(a, 'wiki/topic/alpha.md'));
   assert.equal(fs.existsSync(path.join(dir, 'wiki', 'topic', 'stray.md')), false);

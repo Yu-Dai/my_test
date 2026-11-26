@@ -21,7 +21,7 @@ import { CONFIDENTIALITY_LEVELS, DEFAULT_MAX_CONFIDENTIALITY, defaultCacheDir, d
 export { defaultCacheDir, defaultConfigPath };
 
 // 只用 MCP 的使用者不一定把 kb 加進 PATH，所以引導訊息給完整的執行方式
-const KB_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'kb.js');
+export const KB_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'kb.js');
 
 export const CONFIG_EXAMPLE = JSON.stringify({ max_confidentiality: 'internal', knowledge_bases: [{ path: 'D:/kb/my-notes' }, { remote: '//server/share/kb/uart-driver.git' }] }, null, 2);
 

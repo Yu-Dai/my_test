@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { UNTRUSTED_REASON, untrustedBy } from '../core/index.js';
 
 const TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -36,7 +37,7 @@ export function readSyncInfo(dir) {
 
 /**
  * 把遠端 bare repo 同步到本機快取。第一次是 clone，之後是 fetch 並對齊遠端。
- * @returns {Promise<{ ok: boolean, error: string|null }>}
+ * @returns {Promise<{ ok: boolean, error: string|null, untrusted: boolean }>} untrusted：失敗的原因是 git 無法確認共享位置的擁有者而拒絕
  */
 export async function syncRemote(remote, dir) {
   fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -60,7 +61,8 @@ export async function syncRemote(remote, dir) {
     if (r.ok) r = await run(['reset', '--quiet', '--hard', 'FETCH_HEAD'], dir);
     if (r.ok) r = await run(['clean', '-fdq'], dir);
   }
-  if (!r.ok) return { ok: false, error: r.stderr.split('\n').filter(Boolean).pop() ?? '未知錯誤' };
+  if (!r.ok && untrustedBy(r.stderr)) return { ok: false, error: UNTRUSTED_REASON, untrusted: true };
+  if (!r.ok) return { ok: false, error: r.stderr.split('\n').filter(Boolean).pop() ?? '未知錯誤', untrusted: false };
   fs.writeFileSync(infoPath(dir), `${JSON.stringify({ remote, synced: new Date().toISOString() }, null, 2)}\n`);
-  return { ok: true, error: null };
+  return { ok: true, error: null, untrusted: false };
 }
